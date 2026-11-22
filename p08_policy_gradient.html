@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Policy gradient, baselines, importance sampling, PPO</title>
+<link rel="stylesheet" href="assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="assets/style.css">
+<script defer src="assets/vendor/katex/katex.min.js"></script>
+<script defer src="assets/vendor/katex/auto-render.min.js"></script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/site.js"></script>
+</head>
+<body data-page="p08" data-root=".">
+<main class="content">
+
+<div class="hero">
+  <div class="kicker">Lecture proofs · Oct 24 and Nov 07</div>
+  <h1>Policy gradient, baselines, importance sampling, PPO</h1>
+  <p class="lead">Every derivation of the RL block of the course, in the professor's route and notation: trajectory probability, the policy-gradient theorem (staged, with a picture per stage), reward-to-go, baselines, value/Q/advantage, the LLM as a policy, importance sampling, the off-policy surrogate with TRPO, and the PPO clipped objective. Each proof has a figure, numbered steps with the reason for each line, and a worked numeric check.</p>
+</div>
+
+<div class="box"><span class="box-title">Notation (as used in class)</span>
+<p>State $s_t$, action $a_t$, reward $r_t=r(s_t,a_t)$ (a scalar), transition kernel $P(s_{t+1}\mid s_t,a_t)$, initial distribution $\rho_0(s_0)$, discount $\gamma\in[0,1]$, policy $\pi_\theta(a\mid s)$. Trajectory $\tau=(s_0,a_0,s_1,a_1,\dots)$, return $R(\tau)=\sum_t\gamma^t r_t$, return-to-go $G_t=\sum_{k\ge t}\gamma^{k-t}r_k$, objective $J(\theta)=\mathbb E_{\tau\sim p_\theta}[R(\tau)]$. All derivatives are with respect to $\theta$, and $\nabla\equiv\nabla_\theta$. Sums over actions become integrals for continuous actions.</p></div>
+
+<div class="box"><span class="box-title">Contents</span>
+<ol class="small">
+<li><a href="#trajprob">Probability of a trajectory</a></li>
+<li><a href="#pgt">The policy-gradient theorem (log-derivative trick), in four stages</a></li>
+<li><a href="#togo">Causality: reward-to-go</a></li>
+<li><a href="#baseline">A state-dependent baseline is unbiased (and reduces variance)</a></li>
+<li><a href="#advantage">Value, Q, advantage and the REINFORCE update</a></li>
+<li><a href="#llm">The LLM as an RL policy</a></li>
+<li><a href="#is">Importance sampling</a></li>
+<li><a href="#surrogate">The off-policy surrogate and the TRPO constraint</a></li>
+<li><a href="#ppo">The PPO clipped objective, case by case</a></li>
+<li><a href="#summary">Summary table</a></li>
+</ol></div>
+
+<!-- ============================================================ -->
+<h2 id="trajprob" class="proof-head">1. Probability of a trajectory</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>For a trajectory $\tau=(s_0,a_0,s_1,\dots,s_T)$ under policy $\pi_\theta$ in an MDP, $p_\theta(\tau)=\rho_0(s_0)\prod_{t=0}^{T-1}\pi_\theta(a_t\mid s_t)\,P(s_{t+1}\mid s_t,a_t)$. Source: Oct 24 (section 14) and Nov 07 (section 6). Used in the policy-gradient theorem (section 2 of this page), where exactly the factors that do not contain $\theta$ vanish, and in the importance-sampling ratio of trajectories (section 7).</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 780 262" style="max-width:100%;height:auto" role="img" aria-label="An MDP trajectory with each factor of its probability coloured by whether it depends on theta">
+  <defs>
+    <marker id="p08a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s2)"/></marker>
+    <marker id="p08a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker>
+  </defs>
+  <g font-size="13" text-anchor="middle">
+    <circle cx="70" cy="80" r="24" fill="var(--surface-2)" stroke="var(--s1)" stroke-width="1.6"/><text x="70" y="85">s₀</text>
+    <rect x="170" y="62" width="48" height="36" rx="8" fill="var(--accent-soft)" stroke="var(--s2)" stroke-width="1.6"/><text x="194" y="85">a₀</text>
+    <circle cx="320" cy="80" r="24" fill="var(--surface-2)" stroke="var(--s1)" stroke-width="1.6"/><text x="320" y="85">s₁</text>
+    <rect x="420" y="62" width="48" height="36" rx="8" fill="var(--accent-soft)" stroke="var(--s2)" stroke-width="1.6"/><text x="444" y="85">a₁</text>
+    <circle cx="570" cy="80" r="24" fill="var(--surface-2)" stroke="var(--s1)" stroke-width="1.6"/><text x="570" y="85">s₂</text>
+    <text x="700" y="85" font-size="18">…</text>
+  </g>
+  <line x1="94" y1="80" x2="168" y2="80" stroke="var(--s2)" stroke-width="2" marker-end="url(#p08a1)"/>
+  <line x1="218" y1="80" x2="294" y2="80" stroke="var(--text-3)" stroke-width="2" marker-end="url(#p08a2)"/>
+  <line x1="344" y1="80" x2="418" y2="80" stroke="var(--s2)" stroke-width="2" marker-end="url(#p08a1)"/>
+  <line x1="468" y1="80" x2="544" y2="80" stroke="var(--text-3)" stroke-width="2" marker-end="url(#p08a2)"/>
+  <line x1="594" y1="80" x2="672" y2="80" stroke="var(--text-3)" stroke-width="2" stroke-dasharray="4 3"/>
+  <g font-size="12" text-anchor="middle">
+    <text x="131" y="62" style="fill:var(--s2)">π_θ(a₀|s₀)</text>
+    <text x="256" y="62" class="muted-t">P(s₁|s₀,a₀)</text>
+    <text x="381" y="62" style="fill:var(--s2)">π_θ(a₁|s₁)</text>
+    <text x="506" y="62" class="muted-t">P(s₂|s₁,a₁)</text>
+    <text x="70" y="130" class="muted-t">s₀ ~ ρ₀</text>
+  </g>
+  <line x1="70" y1="118" x2="70" y2="106" stroke="var(--text-3)" stroke-width="1.6" marker-end="url(#p08a2)"/>
+  <text x="390" y="162" text-anchor="middle" font-size="13" font-weight="700">p_θ(τ) = product of the factors above</text>
+  <g font-size="12.5" text-anchor="middle">
+    <rect x="60" y="176" width="100" height="32" rx="6" fill="var(--surface-2)" stroke="var(--text-3)"/><text x="110" y="197">ρ₀(s₀)</text>
+    <rect x="170" y="176" width="100" height="32" rx="6" fill="var(--accent-soft)" stroke="var(--s2)" stroke-width="1.8"/><text x="220" y="197">π_θ(a₀|s₀)</text>
+    <rect x="280" y="176" width="110" height="32" rx="6" fill="var(--surface-2)" stroke="var(--text-3)"/><text x="335" y="197">P(s₁|s₀,a₀)</text>
+    <rect x="400" y="176" width="100" height="32" rx="6" fill="var(--accent-soft)" stroke="var(--s2)" stroke-width="1.8"/><text x="450" y="197">π_θ(a₁|s₁)</text>
+    <rect x="510" y="176" width="110" height="32" rx="6" fill="var(--surface-2)" stroke="var(--text-3)"/><text x="565" y="197">P(s₂|s₁,a₁)</text>
+    <text x="650" y="197" font-size="16">⋯</text>
+  </g>
+  <text x="390" y="234" text-anchor="middle" font-size="12.5"><tspan style="fill:var(--s2)" font-weight="700">orange</tspan> = depends on θ (the agent's choices)     <tspan class="muted-t" font-weight="700">grey</tspan> = environment (no θ inside)</text>
+  <text x="390" y="252" text-anchor="middle" font-size="12" class="muted-t">only the orange factors will survive when we differentiate log p_θ(τ)</text>
+</svg>
+<figcaption class="small muted">Figure 1 — The agent chooses actions (orange, parameterised by θ); the environment supplies the start state and the transitions (grey). The probability of the whole trajectory is the product of both kinds of factor.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Chain rule of probability on the ordered variables: $p_\theta(\tau)=p(s_0)\,p(a_0\mid s_0)\,p(s_1\mid s_0,a_0)\,p(a_1\mid s_0,a_0,s_1)\cdots$ $$p_\theta(\tau)=p(s_0)\prod_{t=0}^{T-1}p(a_t\mid s_0,a_0,\dots,s_t)\;p(s_{t+1}\mid s_0,a_0,\dots,s_t,a_t)$$<span class="why">chain rule</span></li>
+<li>The agent only looks at the current state, so the action distribution is the policy: $$p(a_t\mid s_0,a_0,\dots,s_t)=\pi_\theta(a_t\mid s_t)$$<span class="why">policy depends on $s_t$ only</span></li>
+<li>The environment is Markov: the next state depends only on the current state and action: $$p(s_{t+1}\mid s_0,a_0,\dots,s_t,a_t)=P(s_{t+1}\mid s_t,a_t)$$<span class="why">Markov property</span></li>
+<li>The first state is drawn from the initial distribution, $p(s_0)=\rho_0(s_0)$. Substituting steps 2 and 3 into step 1: $$p_\theta(\tau)=\rho_0(s_0)\prod_{t=0}^{T-1}\pi_\theta(a_t\mid s_t)\,P(s_{t+1}\mid s_t,a_t)$$<span class="why">substitute</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Two steps, $\rho_0(s_0)=0.5$, $\pi_\theta(a_0\mid s_0)=0.6$, $P(s_1\mid s_0,a_0)=0.9$, $\pi_\theta(a_1\mid s_1)=0.7$, $P(s_2\mid s_1,a_1)=0.8$. Then $p_\theta(\tau)=0.5\cdot0.6\cdot0.9\cdot0.7\cdot0.8=0.1512$. If $\theta$ changes the policy factors to $0.65$ and $0.75$, only those two factors move: $0.5\cdot0.65\cdot0.9\cdot0.75\cdot0.8=0.1755$; the grey factors $0.5,0.9,0.8$ are unchanged.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>The MDP is the tuple $(\mathcal S,\mathcal A,P,r,\gamma,\rho_0)$; the policy is <em>outside</em> it (the MDP fixes the problem; the learned policy changes).</li>
+<li>$\rho_0$ is not $P$: $\rho_0$ gives the first state, $P$ governs all later transitions.</li>
+<li>The professor wrote the product over time; for finite horizons it runs to $T-1$.</li>
+</ul></div>
+
+<!-- ============================================================ -->
+<h2 id="pgt" class="proof-head">2. The policy-gradient theorem (log-derivative trick), in four stages</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>$\nabla_\theta J(\theta)=\mathbb E_{\tau\sim p_\theta}\big[\big(\sum_t\nabla_\theta\log\pi_\theta(a_t\mid s_t)\big)R(\tau)\big]$: the gradient of the expected return can be estimated from sampled trajectories, and neither $P$ nor $\rho_0$ needs to be known or differentiated. Source: Oct 24 (section 16) and Nov 07 (section 8). Used by REINFORCE, PPO, GRPO, and (through the log-ratio) DPO; the professor said all of RLHF is built on this result in various forms.</p></div>
+
+<h3>Stage 1 — Write the objective as an integral and move the gradient inside</h3>
+<figure class="diagram">
+<svg viewBox="0 0 780 232" style="max-width:100%;height:auto" role="img" aria-label="Four trajectories with probabilities and returns; gradients of the probabilities sum to zero">
+  <defs>
+    <marker id="p08b1" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--s3)"/></marker>
+    <marker id="p08b2" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--s7)"/></marker>
+  </defs>
+  <text x="285" y="20" text-anchor="middle" font-size="13" font-weight="700">a tiny world with four possible trajectories</text>
+  <line x1="40" y1="160" x2="540" y2="160" stroke="var(--text-3)"/>
+  <rect x="70" y="60" width="44" height="100" fill="var(--s1)" opacity=".7"/>
+  <rect x="190" y="85" width="44" height="75" fill="var(--s1)" opacity=".7"/>
+  <rect x="310" y="110" width="44" height="50" fill="var(--s1)" opacity=".7"/>
+  <rect x="430" y="135" width="44" height="25" fill="var(--s1)" opacity=".7"/>
+  <g font-size="12" text-anchor="middle">
+    <text x="92" y="54">p=0.4</text><text x="212" y="79">p=0.3</text><text x="332" y="104">p=0.2</text><text x="452" y="129">p=0.1</text>
+    <text x="92" y="178">τ₁</text><text x="212" y="178">τ₂</text><text x="332" y="178">τ₃</text><text x="452" y="178">τ₄</text>
+    <text x="92" y="196" class="muted-t">R=5</text><text x="212" y="196" class="muted-t">R=1</text><text x="332" y="196" class="muted-t">R=−2</text><text x="452" y="196" class="muted-t">R=3</text>
+  </g>
+  <!-- gradient arrows: +30, +10, -15, -25 -->
+  <line x1="136" y1="100" x2="136" y2="70" stroke="var(--s3)" stroke-width="3" marker-end="url(#p08b1)"/>
+  <line x1="256" y1="110" x2="256" y2="100" stroke="var(--s3)" stroke-width="3" marker-end="url(#p08b1)"/>
+  <line x1="376" y1="110" x2="376" y2="125" stroke="var(--s7)" stroke-width="3" marker-end="url(#p08b2)"/>
+  <line x1="496" y1="110" x2="496" y2="135" stroke="var(--s7)" stroke-width="3" marker-end="url(#p08b2)"/>
+  <text x="136" y="114" text-anchor="middle" font-size="11.5" style="fill:var(--s3)">∇p₁</text>
+  <text x="256" y="124" text-anchor="middle" font-size="11.5" style="fill:var(--s3)">∇p₂</text>
+  <text x="376" y="104" text-anchor="middle" font-size="11.5" style="fill:var(--s7)">∇p₃</text>
+  <text x="496" y="104" text-anchor="middle" font-size="11.5" style="fill:var(--s7)">∇p₄</text>
+  <g font-size="12.5" text-anchor="start">
+    <text x="565" y="60" font-weight="700">J = Σ p(τ) R(τ)</text>
+    <text x="565" y="84">∇J = Σ ∇p(τ) R(τ)</text>
+    <text x="565" y="112" class="muted-t" font-size="12">∇ acts only on p, since R(τ)</text>
+    <text x="565" y="128" class="muted-t" font-size="12">is a fixed number per τ.</text>
+    <text x="565" y="156" class="muted-t" font-size="12">Arrows: how θ-change shifts</text>
+    <text x="565" y="172" class="muted-t" font-size="12">mass; they sum to zero.</text>
+  </g>
+  <text x="285" y="222" text-anchor="middle" font-size="12" class="muted-t">∇J is a sum with no p(τ) weights, so it is not yet an expectation we can sample</text>
+</svg>
+<figcaption class="small muted">Figure 2 — Stage 1: changing θ moves probability mass between trajectories; the total stays 1, so the gradients ∇p(τ) sum to zero. $\nabla J$ weights each by its return, but it is not yet an average over samples.</figcaption>
+</figure>
+<ol class="steps">
+<li>Expectation as an integral: $$J(\theta)=\mathbb E_{\tau\sim p_\theta}[R(\tau)]=\int p_\theta(\tau)\,R(\tau)\,d\tau$$<span class="why">definition of expectation</span></li>
+<li>Gradient of an integral, with $R(\tau)$ not depending on $\theta$: $$\nabla_\theta J=\int \nabla_\theta p_\theta(\tau)\,R(\tau)\,d\tau$$<span class="why">$\nabla$ is linear; swap with $\int$</span></li>
+</ol>
+
+<h3>Stage 2 — The log-derivative trick restores a probability weight</h3>
+<figure class="diagram">
+<svg viewBox="0 0 780 262" style="max-width:100%;height:auto" role="img" aria-label="A probability curve and its log with tangents illustrating gradient p equals p times gradient log p">
+  <text x="190" y="20" text-anchor="middle" font-size="13" font-weight="700">p_θ(τ) as θ varies (τ fixed)</text>
+  <text x="590" y="20" text-anchor="middle" font-size="13" font-weight="700">log p_θ(τ) as θ varies</text>
+  <line x1="30" y1="195" x2="350" y2="195" stroke="var(--text-3)"/><line x1="410" y1="215" x2="770" y2="215" stroke="var(--text-3)"/>
+  <path d="M40,185 C120,185 150,50 200,50 C250,50 280,185 340,185" fill="none" stroke="var(--s1)" stroke-width="2.6"/>
+  <line x1="91" y1="174" x2="171" y2="61" stroke="var(--s2)" stroke-width="2" stroke-dasharray="5 3"/>
+  <circle cx="131" cy="117.5" r="5" fill="var(--s2)"/>
+  <path d="M380,200 Q520,-20 660,200" fill="none" stroke="var(--s1)" stroke-width="2.6" transform="translate(30,0)"/>
+  <line x1="454" y1="133" x2="534" y2="82" stroke="var(--s2)" stroke-width="2" stroke-dasharray="5 3"/>
+  <circle cx="494" cy="107.6" r="5" fill="var(--s2)"/>
+  <text x="105" y="110" text-anchor="end" font-size="12" style="fill:var(--s2)">slope = ∇p</text>
+  <text x="140" y="140" font-size="12" class="muted-t">the point θ</text>
+  <text x="548" y="70" font-size="12" style="fill:var(--s2)">slope = ∇log p</text>
+  <text x="190" y="215" text-anchor="middle" font-size="12" class="muted-t">∇p is tiny when p is tiny</text>
+  <text x="590" y="235" text-anchor="middle" font-size="12" class="muted-t">∇log p is the relative change: compares fairly across τ</text>
+  <text x="390" y="256" text-anchor="middle" font-size="13" font-weight="700">∇p = p · ∇log p       (slope of p = height × relative slope)</text>
+</svg>
+<figcaption class="small muted">Figure 3 — Stage 2: the slope of p equals p times the slope of log p. Multiplying and dividing by p puts the density back inside the integral, turning the sum over trajectories into an expectation.</figcaption>
+</figure>
+<ol class="steps">
+<li>Chain rule on the logarithm: $$\nabla_\theta\log p_\theta(\tau)=\frac{\nabla_\theta p_\theta(\tau)}{p_\theta(\tau)}\;\;\Longrightarrow\;\;\nabla_\theta p_\theta(\tau)=p_\theta(\tau)\,\nabla_\theta\log p_\theta(\tau)$$<span class="why">log-derivative trick</span></li>
+<li>Substitute into the integral of Stage 1: $$\nabla_\theta J=\int p_\theta(\tau)\,\nabla_\theta\log p_\theta(\tau)\,R(\tau)\,d\tau$$<span class="why">density is back</span></li>
+<li>An integral against $p_\theta$ is an expectation under $p_\theta$: $$\nabla_\theta J=\mathbb E_{\tau\sim p_\theta}\big[\nabla_\theta\log p_\theta(\tau)\,R(\tau)\big]$$<span class="why">definition of expectation</span></li>
+</ol>
+
+<h3>Stage 3 — Expand the log-probability: the environment drops out</h3>
+<figure class="diagram">
+<svg viewBox="0 0 780 232" style="max-width:100%;height:auto" role="img" aria-label="log p of tau splits into three sums; applying the gradient kills the environment terms">
+  <defs><marker id="p08c1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <text x="390" y="22" text-anchor="middle" font-size="13" font-weight="700">log p_θ(τ)  =  (three separate sums, because log turns the product into a sum)</text>
+  <g font-size="13" text-anchor="middle">
+    <rect x="30" y="40" width="200" height="54" rx="8" fill="var(--surface-2)" stroke="var(--text-3)"/><text x="130" y="72">log ρ₀(s₀)</text>
+    <text x="260" y="72" font-size="20">+</text>
+    <rect x="290" y="40" width="210" height="54" rx="8" fill="var(--accent-soft)" stroke="var(--s2)" stroke-width="2"/><text x="395" y="72">Σₜ log π_θ(aₜ|sₜ)</text>
+    <text x="530" y="72" font-size="20">+</text>
+    <rect x="560" y="40" width="190" height="54" rx="8" fill="var(--surface-2)" stroke="var(--text-3)"/><text x="655" y="72">Σₜ log P(sₜ₊₁|sₜ,aₜ)</text>
+  </g>
+  <line x1="130" y1="100" x2="130" y2="140" stroke="var(--text-3)" stroke-width="1.8" marker-end="url(#p08c1)"/>
+  <line x1="395" y1="100" x2="395" y2="140" stroke="var(--s2)" stroke-width="1.8" marker-end="url(#p08c1)"/>
+  <line x1="655" y1="100" x2="655" y2="140" stroke="var(--text-3)" stroke-width="1.8" marker-end="url(#p08c1)"/>
+  <text x="160" y="124" font-size="12.5" class="muted-t">apply ∇_θ</text>
+  <g font-size="14" text-anchor="middle">
+    <rect x="80" y="144" width="100" height="40" rx="8" fill="var(--surface-2)" stroke="var(--text-3)"/><text x="130" y="170">0</text>
+    <rect x="290" y="144" width="210" height="40" rx="8" fill="var(--accent-soft)" stroke="var(--s2)" stroke-width="2"/><text x="395" y="170">Σₜ ∇_θ log π_θ(aₜ|sₜ)</text>
+    <rect x="605" y="144" width="100" height="40" rx="8" fill="var(--surface-2)" stroke="var(--text-3)"/><text x="655" y="170">0</text>
+  </g>
+  <text x="130" y="205" text-anchor="middle" font-size="12" class="muted-t">start distribution: no θ</text>
+  <text x="395" y="205" text-anchor="middle" font-size="12" style="fill:var(--s2)">only the agent's own factors survive</text>
+  <text x="655" y="205" text-anchor="middle" font-size="12" class="muted-t">dynamics: no θ</text>
+</svg>
+<figcaption class="small muted">Figure 4 — Stage 3: the product from Figure 1 becomes a sum under the log. Grey terms do not contain θ, so their gradient is zero. This is why the policy gradient is model-free.</figcaption>
+</figure>
+<ol class="steps">
+<li>Take the log of the product from section 1; log of a product is the sum of logs: $$\log p_\theta(\tau)=\log\rho_0(s_0)+\sum_t\log\pi_\theta(a_t\mid s_t)+\sum_t\log P(s_{t+1}\mid s_t,a_t)$$<span class="why">$\log\prod=\sum\log$</span></li>
+<li>$\rho_0$ and $P$ are properties of the environment and contain no $\theta$: $$\nabla_\theta\log\rho_0(s_0)=0,\qquad \nabla_\theta\log P(s_{t+1}\mid s_t,a_t)=0$$<span class="why">dynamics independent of θ</span></li>
+<li>Only the policy terms remain: $$\nabla_\theta\log p_\theta(\tau)=\sum_t\nabla_\theta\log\pi_\theta(a_t\mid s_t)$$<span class="why">linearity of $\nabla$</span></li>
+</ol>
+
+<h3>Stage 4 — The theorem and its Monte-Carlo estimator</h3>
+<figure class="diagram">
+<svg viewBox="0 0 780 252" style="max-width:100%;height:auto" role="img" aria-label="Three sampled trajectories with returns; the update raises log probability of high-return trajectories and lowers it for negative ones">
+  <defs>
+    <marker id="p08d1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker>
+  </defs>
+  <text x="130" y="20" text-anchor="middle" font-size="13" font-weight="700">sampled trajectories</text>
+  <text x="520" y="20" text-anchor="middle" font-size="13" font-weight="700">weight in the update: R(τᵢ)</text>
+  <text x="700" y="20" text-anchor="middle" font-size="13" font-weight="700">effect on θ</text>
+  <g font-size="12" text-anchor="middle">
+    <!-- rows -->
+    <circle cx="40" cy="60" r="9" fill="var(--surface-2)" stroke="var(--s1)"/><circle cx="90" cy="60" r="9" fill="var(--surface-2)" stroke="var(--s1)"/><circle cx="140" cy="60" r="9" fill="var(--surface-2)" stroke="var(--s1)"/><circle cx="190" cy="60" r="9" fill="var(--surface-2)" stroke="var(--s1)"/>
+    <circle cx="40" cy="125" r="9" fill="var(--surface-2)" stroke="var(--s1)"/><circle cx="90" cy="125" r="9" fill="var(--surface-2)" stroke="var(--s1)"/><circle cx="140" cy="125" r="9" fill="var(--surface-2)" stroke="var(--s1)"/><circle cx="190" cy="125" r="9" fill="var(--surface-2)" stroke="var(--s1)"/>
+    <circle cx="40" cy="190" r="9" fill="var(--surface-2)" stroke="var(--s1)"/><circle cx="90" cy="190" r="9" fill="var(--surface-2)" stroke="var(--s1)"/><circle cx="140" cy="190" r="9" fill="var(--surface-2)" stroke="var(--s1)"/><circle cx="190" cy="190" r="9" fill="var(--surface-2)" stroke="var(--s1)"/>
+  </g>
+  <g stroke="var(--text-3)" stroke-width="1.5">
+    <line x1="49" y1="60" x2="81" y2="60" marker-end="url(#p08d1)"/><line x1="99" y1="60" x2="131" y2="60" marker-end="url(#p08d1)"/><line x1="149" y1="60" x2="181" y2="60" marker-end="url(#p08d1)"/>
+    <line x1="49" y1="125" x2="81" y2="125" marker-end="url(#p08d1)"/><line x1="99" y1="125" x2="131" y2="125" marker-end="url(#p08d1)"/><line x1="149" y1="125" x2="181" y2="125" marker-end="url(#p08d1)"/>
+    <line x1="49" y1="190" x2="81" y2="190" marker-end="url(#p08d1)"/><line x1="99" y1="190" x2="131" y2="190" marker-end="url(#p08d1)"/><line x1="149" y1="190" x2="181" y2="190" marker-end="url(#p08d1)"/>
+  </g>
+  <g font-size="12.5">
+    <text x="215" y="64">τ₁  R=+4</text><text x="215" y="129">τ₂  R=−2</text><text x="215" y="194">τ₃  R=+1</text>
+  </g>
+  <line x1="520" y1="40" x2="520" y2="210" stroke="var(--text-3)"/>
+  <rect x="520" y="48" width="140" height="22" fill="var(--s3)" opacity=".85"/>
+  <rect x="440" y="113" width="80" height="22" fill="var(--s7)" opacity=".85"/>
+  <rect x="520" y="178" width="35" height="22" fill="var(--s3)" opacity=".85"/>
+  <g font-size="12" text-anchor="start">
+    <text x="672" y="64" style="fill:var(--s3)">raise log p(τ₁)</text>
+    <text x="672" y="129" style="fill:var(--s7)">lower log p(τ₂)</text>
+    <text x="672" y="194" style="fill:var(--s3)">raise log p(τ₃)</text>
+  </g>
+  <text x="390" y="236" text-anchor="middle" font-size="12.5">ĝ = (1/N) Σᵢ R(τᵢ) Σₜ ∇log π_θ(aₜ|sₜ)   —   a return-weighted likelihood gradient on the agent's own samples</text>
+</svg>
+<figcaption class="small muted">Figure 5 — Stage 4: the estimator is "maximum likelihood on your own samples, with each trajectory weighted by its return". Positive returns reinforce the actions taken; negative returns suppress them.</figcaption>
+</figure>
+<ol class="steps">
+<li>Combine Stage 2 (step 3) with Stage 3 (step 3): $$\nabla_\theta J=\mathbb E_{\tau\sim p_\theta}\Big[\Big(\sum_t\nabla_\theta\log\pi_\theta(a_t\mid s_t)\Big)R(\tau)\Big]$$<span class="why">substitute the expanded score</span></li>
+<li>Replace the expectation by an average over $N$ trajectories sampled by running the policy in the environment: $$\widehat{\nabla_\theta J}=\frac1N\sum_{i=1}^N R(\tau_i)\sum_t\nabla_\theta\log\pi_\theta\big(a_t^{(i)}\mid s_t^{(i)}\big)$$<span class="why">Monte-Carlo estimate</span></li>
+<li>Unbiasedness: $\mathbb E[\widehat{\nabla J}]=\nabla J$ because each $\tau_i\sim p_\theta$. Update by gradient <em>ascent</em> (we maximise $J$): $$\theta_{k+1}=\theta_k+\alpha\,\widehat{\nabla_\theta J}(\theta_k)$$<span class="why">ascent on $J$</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check: a 2-armed softmax bandit (exact gradient vs score-function formula)</span>
+<p>One step ($T=1$), $\pi_\theta=\mathrm{softmax}(\theta)$ with $\theta=(\ln2,\,0)$ so $\pi=(\tfrac23,\tfrac13)$, rewards $r=(3,1)$. Here $\tau=(a)$ and $p_\theta(\tau)=\pi_\theta(a)$.</p>
+<p><strong>Exact:</strong> $J=\pi_1\cdot3+\pi_2\cdot1=\tfrac73$. With $\pi_1=e^{\theta_1}/(e^{\theta_1}+e^{\theta_2})$, $\partial\pi_1/\partial\theta_1=\pi_1\pi_2$, so $\partial J/\partial\theta_1=\pi_1\pi_2(r_1-r_2)=\tfrac23\cdot\tfrac13\cdot2=\tfrac49$ and $\partial J/\partial\theta_2=-\tfrac49$.</p>
+<p><strong>Score function:</strong> $\log\pi_a=\theta_a-\log\sum_b e^{\theta_b}$, so $\nabla_\theta\log\pi_a=e_a-\pi$, i.e. $(\tfrac13,-\tfrac13)$ for $a=1$ and $(-\tfrac23,\tfrac23)$ for $a=2$. Then $\nabla J=\sum_a\pi_a\,r_a\,(e_a-\pi)=\tfrac23\cdot3\cdot(\tfrac13,-\tfrac13)+\tfrac13\cdot1\cdot(-\tfrac23,\tfrac23)=(\tfrac23,-\tfrac23)+(-\tfrac29,\tfrac29)=(\tfrac49,-\tfrac49)$. The two agree. (Python finite-difference check: $0.444444$.)</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>The three moves, in order: (i) $\nabla$ inside the integral, (ii) $\nabla p=p\nabla\log p$, (iii) $\log p_\theta(\tau)$ is a sum, and $\rho_0$, $P$ have zero gradient.</li>
+<li>Key takeaway the professor stressed: we do <strong>not</strong> need to know the transition kernel or the initial distribution; the environment is only sampled.</li>
+<li>It is gradient <strong>ascent</strong> on $J$ (the lecture said "descent"; the notes correct this).</li>
+<li>The expectation is over <em>all</em> trajectories; in practice approximated with sampled ones.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Do not claim that $\nabla_\theta p_\theta(\tau)$ "contains" $\nabla P$. The trick works because $\nabla\log P=0$ term by term, not because the product's derivative is simple. Also: the samples must come from the <em>current</em> policy $p_\theta$; the formula is on-policy.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="togo" class="proof-head">3. Causality: reward-to-go</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>In the policy gradient, action $a_t$ only needs to be credited with rewards from time $t$ on: $\nabla J=\mathbb E\big[\sum_t\gamma^t\nabla\log\pi_\theta(a_t\mid s_t)\,G_t\big]$, because $\mathbb E[\nabla\log\pi_\theta(a_t\mid s_t)\,r_k]=0$ for $k\lt t$. Source: the lecture's final form uses $G_t$ (Nov 07, section 9) and the Oct 24 note (section 17) says the equivalence "uses the return-to-go"; the proof below is <strong>step filled in — not written out in class</strong>. Used to justify the lower-variance estimator inside the advantage form.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 780 262" style="max-width:100%;height:auto" role="img" aria-label="Action a2 can influence rewards r2 and r3 but not r0 and r1">
+  <defs>
+    <marker id="p08e1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s3)"/></marker>
+  </defs>
+  <text x="40" y="22" font-size="12.5" class="muted-t">time →</text>
+  <g font-size="13" text-anchor="middle">
+    <rect x="86" y="34" width="48" height="34" rx="8" fill="var(--accent-soft)" stroke="var(--s2)"/><text x="110" y="56">a₀</text>
+    <rect x="236" y="34" width="48" height="34" rx="8" fill="var(--accent-soft)" stroke="var(--s2)"/><text x="260" y="56">a₁</text>
+    <rect x="386" y="34" width="48" height="34" rx="8" fill="var(--accent-soft)" stroke="var(--s2)" stroke-width="3"/><text x="410" y="56" font-weight="700">a₂</text>
+    <rect x="536" y="34" width="48" height="34" rx="8" fill="var(--accent-soft)" stroke="var(--s2)"/><text x="560" y="56">a₃</text>
+    <circle cx="110" cy="190" r="20" fill="var(--surface-2)" stroke="var(--s1)"/><text x="110" y="195">r₀</text>
+    <circle cx="260" cy="190" r="20" fill="var(--surface-2)" stroke="var(--s1)"/><text x="260" y="195">r₁</text>
+    <circle cx="410" cy="190" r="20" fill="var(--surface-2)" stroke="var(--s1)"/><text x="410" y="195">r₂</text>
+    <circle cx="560" cy="190" r="20" fill="var(--surface-2)" stroke="var(--s1)"/><text x="560" y="195">r₃</text>
+  </g>
+  <line x1="410" y1="70" x2="410" y2="168" stroke="var(--s3)" stroke-width="2.4" marker-end="url(#p08e1)"/>
+  <line x1="420" y1="70" x2="548" y2="170" stroke="var(--s3)" stroke-width="2.4" marker-end="url(#p08e1)"/>
+  <line x1="400" y1="70" x2="124" y2="172" stroke="var(--s7)" stroke-width="2" stroke-dasharray="5 4"/>
+  <line x1="404" y1="70" x2="262" y2="168" stroke="var(--s7)" stroke-width="2" stroke-dasharray="5 4"/>
+  <g font-size="18" font-weight="700" text-anchor="middle" style="fill:var(--s7)">
+    <text x="262" y="132">✗</text><text x="190" y="152">✗</text>
+  </g>
+  <text x="390" y="236" text-anchor="middle" font-size="12.5"><tspan style="fill:var(--s3)" font-weight="700">solid</tspan>: a₂ can change r₂, r₃ (and later)    <tspan style="fill:var(--s7)" font-weight="700">dashed ✗</tspan>: r₀, r₁ already happened, a₂ cannot change them</text>
+  <text x="390" y="254" text-anchor="middle" font-size="12" class="muted-t">so r₀, r₁ multiply ∇log π(a₂|s₂) only as zero-mean noise: drop them</text>
+</svg>
+<figcaption class="small muted">Figure 6 — Rewards earned before time $t$ are fixed by the history when $a_t$ is chosen, so they carry no information about whether $a_t$ was good.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Start from the theorem with $R(\tau)=\sum_k\gamma^k r_k$ and distribute the double sum: $$\nabla J=\sum_t\sum_k\gamma^k\,\mathbb E\big[\nabla\log\pi_\theta(a_t\mid s_t)\,r_k\big]$$<span class="why">linearity of $\mathbb E$</span></li>
+<li>Fix $k\lt t$. Let $h_t=(s_0,a_0,\dots,s_t)$ be the history up to the moment $a_t$ is drawn. The reward $r_k=r(s_k,a_k)$ with $k\lt t$ is a function of $h_t$. Condition on $h_t$: $$\mathbb E\big[\nabla\log\pi_\theta(a_t\mid s_t)\,r_k\big]=\mathbb E_{h_t}\Big[r_k\;\mathbb E_{a_t\sim\pi_\theta(\cdot\mid s_t)}\big[\nabla\log\pi_\theta(a_t\mid s_t)\big]\Big]$$<span class="why">tower property</span></li>
+<li>The inner expectation is zero (log-derivative trick backwards): $$\mathbb E_{a\sim\pi_\theta}[\nabla\log\pi_\theta(a\mid s)]=\sum_a\pi_\theta(a\mid s)\frac{\nabla\pi_\theta(a\mid s)}{\pi_\theta(a\mid s)}=\nabla\sum_a\pi_\theta(a\mid s)=\nabla 1=0$$<span class="why">probabilities sum to 1</span></li>
+<li>Hence every term with $k\lt t$ vanishes and only $k\ge t$ survive: $$\nabla J=\mathbb E\Big[\sum_t\nabla\log\pi_\theta(a_t\mid s_t)\sum_{k\ge t}\gamma^k r_k\Big]$$<span class="why">drop zero terms</span></li>
+<li>Factor $\gamma^t$ out of the inner sum and use $G_t=\sum_{k\ge t}\gamma^{k-t}r_k$: $$\nabla J=\mathbb E\Big[\sum_t\gamma^t\,\nabla\log\pi_\theta(a_t\mid s_t)\,G_t\Big]$$<span class="why">$\gamma^k=\gamma^t\gamma^{k-t}$</span></li>
+<li>Variance: the dropped terms have zero mean but non-zero variance, so removing them keeps the estimator unbiased and can only lower its variance (sum of fewer noisy terms).<span class="why">same mean, less noise</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Take the bandit of section 2 played twice independently (actions $a_0,a_1$, rewards $r_0=r(a_0)$, $r_1=r(a_1)$). The cross-term is $\mathbb E[\nabla\log\pi(a_1)\,r_0]=\mathbb E[\nabla\log\pi(a_1)]\cdot\mathbb E[r_0]=(0,0)\cdot\tfrac73$, because $\mathbb E[\nabla\log\pi]=\tfrac23(\tfrac13,-\tfrac13)+\tfrac13(-\tfrac23,\tfrac23)=(0,0)$. The sampled value is not zero, though: e.g. $a_1=1,r_0=3$ gives $(1,-1)$, pure noise.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Reason in one line: <em>the past reward does not depend on the future action</em>, so its covariance with the score of the future action is zero.</li>
+<li>The professor wrote the final form with the return from time $t$ and omitted the $\gamma^t$ factor for simplicity; the exact form carries $\gamma^t$ (often dropped in practice).</li>
+</ul></div>
+
+<!-- ============================================================ -->
+<h2 id="baseline" class="proof-head">4. A state-dependent baseline is unbiased (and reduces variance)</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>For any function $b(s_t)$ that depends on the state but not on $a_t$: $\mathbb E\big[\sum_t\nabla\log\pi_\theta(a_t\mid s_t)\,(G_t-b(s_t))\big]=\mathbb E\big[\sum_t\nabla\log\pi_\theta(a_t\mid s_t)\,G_t\big]$, i.e. subtracting $b$ changes the variance but not the expected gradient. Source: Oct 24 (section 17.1, stated without proof) and Nov 07 (section 9); the proof is <strong>step filled in — not written out in class</strong>. Used to define the advantage $A=Q-V$ and by PPO/GRPO (group mean as baseline).</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 780 290" style="max-width:100%;height:auto" role="img" aria-label="For each baseline, the two possible values of the single-sample gradient estimate and their mean">
+  <text x="390" y="18" text-anchor="middle" font-size="13" font-weight="700">possible values of the one-sample gradient estimate (component 1), for different baselines</text>
+  <line x1="337.5" y1="30" x2="337.5" y2="248" stroke="var(--s2)" stroke-width="1.6" stroke-dasharray="5 4"/>
+  <text x="340" y="262" text-anchor="middle" font-size="12" style="fill:var(--s2)">true gradient 4/9 = 0.444 (same for every b)</text>
+  <g stroke="var(--text-3)" stroke-width="1"><line x1="120" y1="56" x2="720" y2="56"/><line x1="120" y1="106" x2="720" y2="106"/><line x1="120" y1="156" x2="720" y2="156"/><line x1="120" y1="206" x2="720" y2="206"/></g>
+  <g font-size="12.5" text-anchor="start">
+    <text x="10" y="52" font-weight="700">b = 0</text><text x="10" y="102" font-weight="700">b = 5/3</text><text x="10" y="152" font-weight="700">b = 7/3 = V</text><text x="10" y="202" font-weight="700">b = 10</text>
+    <text x="10" y="68" class="muted-t" font-size="11.5">Var = 0.617</text><text x="10" y="118" class="muted-t" font-size="11.5">Var = 0</text><text x="10" y="168" class="muted-t" font-size="11.5">Var = 0.099</text><text x="10" y="218" class="muted-t" font-size="11.5">Var = 15.43</text>
+  </g>
+  <!-- b=0: values 1 (p=2/3) -> x=372.7 ; -0.667 (p=1/3) -> 267.4 -->
+  <circle cx="372.7" cy="56" r="9" fill="var(--s1)"/><circle cx="267.4" cy="56" r="6" fill="var(--s8)"/>
+  <!-- b=5/3: both 0.444 -->
+  <circle cx="337.5" cy="106" r="9" fill="var(--s1)"/>
+  <!-- b=7/3: 0.222 -> 323.5 ; 0.889 -> 365.7 -->
+  <circle cx="323.5" cy="156" r="9" fill="var(--s1)"/><circle cx="365.7" cy="156" r="6" fill="var(--s8)"/>
+  <!-- b=10: -2.333 -> 162.1 ; 6 -> 688.4 -->
+  <circle cx="162.1" cy="206" r="9" fill="var(--s1)"/><circle cx="688.4" cy="206" r="6" fill="var(--s8)"/>
+  <g font-size="11.5" class="muted-t" text-anchor="middle">
+    <text x="372.7" y="40">a=1 (p=2/3)</text><text x="267.4" y="40">a=2 (p=1/3)</text>
+    <text x="162.1" y="190">a=1</text><text x="688.4" y="190">a=2</text>
+  </g>
+</svg>
+<figcaption class="small muted">Figure 7 — Same mean (dashed line) for every baseline, very different spread. Blue = action 1 (prob. 2/3), red = action 2 (prob. 1/3). A baseline close to the typical return makes the samples cluster around the true gradient; a bad baseline (b=10) throws them far away.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>The extra term in the gradient is $\mathbb E\big[\nabla\log\pi_\theta(a_t\mid s_t)\,b(s_t)\big]$. Condition on the history $h_t$ up to $s_t$; $b(s_t)$ is a function of $h_t$ and factors out of the inner expectation over $a_t$: $$\mathbb E\big[\nabla\log\pi_\theta(a_t\mid s_t)\,b(s_t)\big]=\mathbb E_{h_t}\Big[b(s_t)\,\mathbb E_{a_t\sim\pi_\theta(\cdot\mid s_t)}\big[\nabla\log\pi_\theta(a_t\mid s_t)\big]\Big]$$<span class="why">tower property</span></li>
+<li>Inner expectation: $$\sum_a\pi_\theta(a\mid s)\,\nabla\log\pi_\theta(a\mid s)=\sum_a\nabla\pi_\theta(a\mid s)=\nabla\sum_a\pi_\theta(a\mid s)=\nabla 1=0$$<span class="why">$\nabla\pi=\pi\nabla\log\pi$; normalisation</span></li>
+<li>So the baseline term has zero expectation, and by linearity: $$\mathbb E\big[\nabla\log\pi_\theta(a_t\mid s_t)\,(G_t-b(s_t))\big]=\mathbb E\big[\nabla\log\pi_\theta(a_t\mid s_t)\,G_t\big]-0$$<span class="why">unbiased</span></li>
+<li>Variance (one scalar component, score $X=\partial_{\theta_j}\log\pi_\theta(a\mid s)$, return $G$, state fixed). The mean of $X(G-b)$ does not depend on $b$, so only the second moment matters: $$\mathbb E\big[X^2(G-b)^2\big]=\mathbb E[X^2G^2]-2b\,\mathbb E[X^2G]+b^2\,\mathbb E[X^2]$$<span class="why">expand the square</span></li>
+<li>This is a parabola in $b$, minimised where the derivative vanishes: $$b^\star=\frac{\mathbb E[X^2G]}{\mathbb E[X^2]}$$<span class="why">$\frac{d}{db}=0$ (filled in)</span></li>
+<li>$b^\star$ is a score-weighted average return for that state; it is close to the state's average return $V^\pi(s)$, which is why the professor's natural choice is $b(s)=V^\pi(s)$ (next section). It is not exactly optimal, but cheap and effective.<span class="why">choice of $b$</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check (same bandit: $\pi=(\tfrac23,\tfrac13)$, $r=(3,1)$, component $\theta_1$)</span>
+<p>The one-sample estimate is $g=(r_a-b)\,(e_a-\pi)_1$, taking value $(3-b)\tfrac13$ with prob. $\tfrac23$ and $(1-b)(-\tfrac23)$ with prob. $\tfrac13$.</p>
+<div class="table-wrap"><table>
+<tr><th>baseline $b$</th><th>$g$ if $a=1$</th><th>$g$ if $a=2$</th><th>mean of $g$</th><th>variance of $g$</th></tr>
+<tr><td>0</td><td>1</td><td>−2/3</td><td>4/9</td><td>50/81 = 0.617</td></tr>
+<tr><td>5/3 (= $b^\star$)</td><td>4/9</td><td>4/9</td><td>4/9</td><td>0</td></tr>
+<tr><td>2</td><td>1/3</td><td>2/3</td><td>4/9</td><td>2/81 = 0.025</td></tr>
+<tr><td>7/3 (= $V$)</td><td>2/9</td><td>8/9</td><td>4/9</td><td>8/81 = 0.099</td></tr>
+<tr><td>10</td><td>−7/3</td><td>6</td><td>4/9</td><td>1250/81 = 15.43</td></tr>
+</table></div>
+<p>The mean is $4/9$ in every row (unbiased); the variance ranges from 0 to 15.4. With $b^\star=\mathbb E[X^2G]/\mathbb E[X^2]=\tfrac{10/27}{6/27}=\tfrac53$ the estimate is deterministic. For a two-action bandit this is special; in general variance is reduced, not eliminated.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Core identity: $\mathbb E_{a\sim\pi}[\nabla\log\pi(a\mid s)]=0$; hence <em>any</em> $b(s)$ is allowed.</li>
+<li>Baseline reduces variance, never the bias: "unbiased, lower variance". The professor stated the variance claim without proof.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>The baseline must not depend on the action $a_t$ (or on anything after $a_t$ is drawn). If $b=b(s_t,a_t)$, then $b$ cannot be pulled out of $\mathbb E_{a_t}$ and the bias is $\mathbb E_a[\nabla\log\pi(a\mid s)\,b(s,a)]\ne0$ in general.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="advantage" class="proof-head">5. Value, Q, advantage and the REINFORCE update</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>With $V^\pi(s)=\mathbb E_\pi[G_t\mid s_t=s]$, $Q^\pi(s,a)=\mathbb E_\pi[G_t\mid s_t=s,a_t=a]$ and $A^\pi=Q^\pi-V^\pi$: (a) $\mathbb E[\nabla\log\pi\,G_t]=\mathbb E[\nabla\log\pi\,Q^\pi]$; (b) $Q^\pi(s,a)=r(s,a)+\gamma\,\mathbb E_{s'}[V^\pi(s')]$ and $V^\pi(s)=\mathbb E_{a\sim\pi}[Q^\pi(s,a)]$; (c) $\nabla J=\mathbb E\big[\sum_t\nabla\log\pi_\theta(a_t\mid s_t)\,A^\pi(s_t,a_t)\big]$. Source: Oct 24 (section 17) and Nov 07 (section 9); the lecture said the algebra to go from "return minus baseline" to the advantage was skipped, so steps (a)-(c) are <strong>filled in — not written out in class</strong>. Used by PPO (the $\hat A_t$ in the objective).</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 780 266" style="max-width:100%;height:auto" role="img" aria-label="Q values of three actions as bars, the state value V as a horizontal line, advantages as arrows">
+  <defs>
+    <marker id="p08f1" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s3)"/></marker>
+    <marker id="p08f2" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s7)"/></marker>
+  </defs>
+  <text x="300" y="18" text-anchor="middle" font-size="13" font-weight="700">one state s, three actions</text>
+  <line x1="50" y1="150" x2="560" y2="150" stroke="var(--text-3)"/>
+  <rect x="110" y="62" width="70" height="88" fill="var(--s1)" opacity=".75"/>
+  <rect x="270" y="106" width="70" height="44" fill="var(--s1)" opacity=".75"/>
+  <rect x="430" y="150" width="70" height="22" fill="var(--s1)" opacity=".75"/>
+  <line x1="60" y1="97.2" x2="550" y2="97.2" stroke="var(--s2)" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="552" y="101" font-size="12.5" font-weight="700" style="fill:var(--s2)">V = 2.4</text>
+  <g font-size="12.5" text-anchor="middle">
+    <text x="145" y="56">Q = 4</text><text x="305" y="123" style="fill:var(--text)">Q = 2</text>
+    <text x="465" y="190">Q = −1</text>
+    <text x="145" y="196">a₁   π=0.5</text><text x="305" y="196">a₂   π=0.3</text><text x="465" y="212">a₃   π=0.2</text>
+  </g>
+  <line x1="205" y1="97.2" x2="205" y2="64" stroke="var(--s3)" stroke-width="3" marker-end="url(#p08f1)"/>
+  <line x1="365" y1="97.2" x2="365" y2="104" stroke="var(--s7)" stroke-width="3" marker-end="url(#p08f2)"/>
+  <line x1="525" y1="97.2" x2="525" y2="170" stroke="var(--s7)" stroke-width="3" marker-end="url(#p08f2)"/>
+  <g font-size="12" text-anchor="middle">
+    <text x="205" y="84" style="fill:var(--s3)" text-anchor="start" dx="6">A=+1.6</text>
+    <text x="365" y="90" style="fill:var(--s7)" text-anchor="start" dx="6">A=−0.4</text>
+    <text x="525" y="132" style="fill:var(--s7)" text-anchor="end" dx="-6">A=−3.4</text>
+  </g>
+  <g font-size="12.5" text-anchor="start">
+    <text x="600" y="60" font-weight="700">V = Σₐ π(a|s) Q(s,a)</text>
+    <text x="600" y="78" class="muted-t" font-size="12">= 2 + 0.6 − 0.2 = 2.4</text>
+    <text x="600" y="108" font-weight="700">A = Q − V</text>
+    <text x="600" y="126" class="muted-t" font-size="12">above the line: better than</text>
+    <text x="600" y="142" class="muted-t" font-size="12">the policy's average action</text>
+    <text x="600" y="172" font-weight="700">Σₐ π A = 0</text>
+    <text x="600" y="190" class="muted-t" font-size="12">0.8 − 0.12 − 0.68 = 0</text>
+  </g>
+  <text x="300" y="250" text-anchor="middle" font-size="12" class="muted-t">the advantage is Q measured from the average-action line V: positive = reinforce, negative = suppress</text>
+</svg>
+<figcaption class="small muted">Figure 8 — The value $V(s)$ is the probability-weighted average of the $Q(s,a)$. The advantage of an action is how far its $Q$ lies above or below that average; it always averages to zero under the policy.</figcaption>
+</figure>
+
+<ol class="steps">
+<li><strong>(a) $G_t\to Q$.</strong> Condition on the history $h_t$, then on $a_t$. By the Markov property, the future after $(s_t,a_t)$ does not depend on older history, so $\mathbb E[G_t\mid h_t,a_t]=Q^\pi(s_t,a_t)$. The score $\nabla\log\pi(a_t\mid s_t)$ is a function of $(s_t,a_t)$ and passes through: $$\mathbb E\big[\nabla\log\pi_\theta(a_t\mid s_t)\,G_t\big]=\mathbb E\big[\nabla\log\pi_\theta(a_t\mid s_t)\,Q^\pi(s_t,a_t)\big]$$<span class="why">tower property + Markov</span></li>
+<li><strong>(b) Bellman relation.</strong> The return obeys $G_t=r_t+\gamma G_{t+1}$. Take $\mathbb E[\,\cdot\mid s_t=s,a_t=a]$; $r_t=r(s,a)$ is known and $\mathbb E[G_{t+1}\mid s_{t+1}=s']=V^\pi(s')$: $$Q^\pi(s,a)=r(s,a)+\gamma\sum_{s'}P(s'\mid s,a)\,V^\pi(s')$$<span class="why">recursion of return</span></li>
+<li>Average $Q$ over the first action drawn from the policy: $$V^\pi(s)=\sum_a\pi_\theta(a\mid s)\,Q^\pi(s,a)$$<span class="why">tower property</span></li>
+<li><strong>(c) Advantage form.</strong> $V^\pi(s_t)$ depends on the state only, so by section 4 it is a legal baseline: $$\mathbb E\big[\nabla\log\pi_\theta(a_t\mid s_t)\,(Q^\pi(s_t,a_t)-V^\pi(s_t))\big]=\mathbb E\big[\nabla\log\pi_\theta(a_t\mid s_t)\,Q^\pi(s_t,a_t)\big]$$<span class="why">baseline lemma, $b=V$</span></li>
+<li>Chain steps (a) and (c) with the reward-to-go form of section 3: $$\nabla J=\mathbb E_{\tau\sim p_\theta}\Big[\sum_t\nabla\log\pi_\theta(a_t\mid s_t)\,A^\pi(s_t,a_t)\Big],\qquad A^\pi=Q^\pi-V^\pi$$<span class="why">definition of $A$ (lecture drops $\gamma^t$)</span></li>
+<li>Centering property: using step 3, $$\mathbb E_{a\sim\pi}[A^\pi(s,a)]=\sum_a\pi(a\mid s)Q^\pi(s,a)-V^\pi(s)=0$$<span class="why">advantage averages to zero</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<h3>REINFORCE (the canonical algorithm)</h3>
+<ol class="steps">
+<li>Run the current policy $\pi_\theta$ in the environment to collect $N$ trajectories $\tau_i$.<span class="why">on-policy sampling</span></li>
+<li>For each time step compute the return-to-go $G_t^{(i)}$ (and, with a baseline, a value estimate $\hat V(s_t^{(i)})$). The advantage estimate is $\hat A_t=G_t-\hat V(s_t)$ (the lecture: "return or $Q$ estimate minus $V$"; the one-step TD form $r_t+\gamma\hat V(s_{t+1})-\hat V(s_t)$ is a standard alternative, <em>not derived in class</em>).<span class="why">estimate $A$</span></li>
+<li>Form $\hat g=\frac1N\sum_i\sum_t\nabla\log\pi_\theta(a_t^{(i)}\mid s_t^{(i)})\,\hat A_t^{(i)}$ and update $\theta\leftarrow\theta+\alpha\hat g$.<span class="why">likelihood-ratio update</span></li>
+</ol>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Figure 8: $\pi=(0.5,0.3,0.2)$, $Q=(4,2,-1)$. Then $V=0.5\cdot4+0.3\cdot2+0.2\cdot(-1)=2.4$ and $A=(1.6,-0.4,-3.4)$. Check: $\sum\pi A=0.8-0.12-0.68=0$. Bellman check: if from this state each action gives $r=(1,0,-1)$ and next-state value $V(s')=(3,2,0)$ with $\gamma=1$ (deterministic), then $Q=r+\gamma V(s')=(4,2,-1)$, matching. In the bandit of section 4, $V=\tfrac23\cdot3+\tfrac13\cdot1=\tfrac73$, $A=(\tfrac23,-\tfrac43)$ and $\sum_a\pi_aA_a\nabla\log\pi_a$ component 1 $=\tfrac23\cdot\tfrac23\cdot\tfrac13+\tfrac13\cdot(-\tfrac43)\cdot(-\tfrac23)=\tfrac4{27}+\tfrac8{27}=\tfrac49$, the exact gradient again.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>$V$ conditions only on the state; $Q$ also fixes the first action; $A=Q-V$ = "how much better is this action than the policy's average action in this state".</li>
+<li>It is <em>not</em> literally "one reward minus $V$": it is a return (or $Q$) estimate minus $V$.</li>
+<li>Algorithms (PPO, TRPO, DPO, GRPO) differ mainly in how they estimate the advantage and how they keep updates stable.</li>
+</ul></div>
+
+<!-- ============================================================ -->
+<h2 id="llm" class="proof-head">6. The LLM as an RL policy</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>Identify state = prompt plus tokens so far, action = next token, trajectory = full response. Then $p_\theta(\tau)=\rho_0(x)\,\pi_\theta(y\mid x)$ with $\pi_\theta(y\mid x)=\prod_t\pi_\theta(y_t\mid x,y_{\lt t})$, and $\nabla J=\mathbb E_{x,\,y\sim\pi_\theta}\big[R(x,y)\sum_t\nabla\log\pi_\theta(y_t\mid x,y_{\lt t})\big]$: reward-weighted next-token log-likelihood. Source: Nov 07 (section 10; the question was deferred from Oct 24, section 13). The transition-kernel simplification is <strong>step filled in — not written out in class</strong>. Used by RLHF/PPO/GRPO for LLMs.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 780 262" style="max-width:100%;height:auto" role="img" aria-label="Prompt followed by generated tokens; each prefix is a state, each token an action, a reward at the end">
+  <text x="30" y="22" font-size="12.5" font-weight="700">trajectory = one response, generated token by token</text>
+  <g font-size="13" text-anchor="middle">
+    <text x="540" y="42" style="fill:var(--s2)" font-weight="700">a₀</text><text x="620" y="42" style="fill:var(--s2)" font-weight="700">a₁</text><text x="700" y="42" style="fill:var(--s2)" font-weight="700">a₂</text>
+    <rect x="30" y="52" width="470" height="40" rx="8" fill="var(--surface-2)" stroke="var(--s1)"/><text x="265" y="77">What is the capital city of India?</text>
+    <rect x="510" y="52" width="60" height="40" rx="8" fill="var(--accent-soft)" stroke="var(--s2)" stroke-width="1.8"/><text x="540" y="77">New</text>
+    <rect x="590" y="52" width="60" height="40" rx="8" fill="var(--accent-soft)" stroke="var(--s2)" stroke-width="1.8"/><text x="620" y="77">Delhi</text>
+    <rect x="670" y="52" width="60" height="40" rx="8" fill="var(--accent-soft)" stroke="var(--s2)" stroke-width="1.8"/><text x="700" y="77">&lt;eos&gt;</text>
+  </g>
+  <g stroke="var(--text-3)" fill="none" stroke-width="1.6">
+    <path d="M30,106 v8 h470 v-8"/><path d="M30,128 v8 h540 v-8"/><path d="M30,150 v8 h620 v-8"/>
+  </g>
+  <g font-size="12.5" text-anchor="middle">
+    <text x="508" y="124" text-anchor="start">s₀ = prompt x</text>
+    <text x="578" y="146" text-anchor="start">s₁ = (x, New)</text>
+    <text x="658" y="168" text-anchor="start">s₂ = (x,New,Delhi)</text>
+  </g>
+  <rect x="520" y="172" width="230" height="46" rx="8" fill="var(--accent-soft)" stroke="var(--s3)" stroke-width="1.8"/>
+  <text x="635" y="192" text-anchor="middle" font-size="12.5" font-weight="700">reward R(x,y)</text>
+  <text x="635" y="209" text-anchor="middle" font-size="12" class="muted-t">checker: answer correct = 1</text>
+  <text x="30" y="214" font-size="12.5" style="fill:var(--s2)">π_θ(aₜ|sₜ) = softmax over the vocabulary</text>
+  <text x="30" y="236" font-size="12" class="muted-t">the environment's "transition" just appends the token: s_(t+1) = (s_t, a_t), probability 1</text>
+  <text x="30" y="254" font-size="12" class="muted-t">so no unknown dynamics are left: the only randomness is the policy and the prompt</text>
+</svg>
+<figcaption class="small muted">Figure 9 — Autoregressive decoding is an RL rollout: each prefix is a state, each sampled token an action, and the finished response receives the reward.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Dictionary: $s_t=(x,y_{\lt t})$, $a_t=y_t$, $\pi_\theta(a_t\mid s_t)=\pi_\theta(y_t\mid x,y_{\lt t})$ (the next-token softmax), $s_0=x\sim\rho_0$, terminal at the end token.<span class="why">definition</span></li>
+<li>The "environment" only concatenates: $P(s_{t+1}\mid s_t,a_t)=1$ if $s_{t+1}=(s_t,a_t)$ and $0$ otherwise. In the trajectory probability of section 1, along the realised trajectory every $P$ factor equals $1$: $$p_\theta(\tau)=\rho_0(x)\prod_{t=1}^{T}\pi_\theta(y_t\mid x,y_{\lt t})\cdot1=\rho_0(x)\,\pi_\theta(y\mid x)$$<span class="why">deterministic transition</span></li>
+<li>Hence the trajectory log-probability is exactly the autoregressive log-likelihood: $$\nabla\log p_\theta(\tau)=\sum_t\nabla\log\pi_\theta(y_t\mid x,y_{\lt t})=\nabla\log\pi_\theta(y\mid x)$$<span class="why">$\rho_0$ has no θ; log of product</span></li>
+<li>Apply the theorem of section 2 with $R(\tau)=R(x,y)$: $$\nabla J=\mathbb E_{x\sim\rho_0,\;y\sim\pi_\theta(\cdot\mid x)}\Big[R(x,y)\sum_t\nabla\log\pi_\theta(y_t\mid x,y_{\lt t})\Big]$$<span class="why">policy-gradient theorem</span></li>
+<li>Compare with pre-training/SFT: the loss gradient is $-\sum_t\nabla\log\pi_\theta(y_t\mid x,y_{\lt t})$ on <em>given</em> data. The RL gradient is the same score on the model's <em>own samples</em>, scaled by the reward (or by the advantage, with a baseline). With $R\equiv1$ on demonstration data it reduces to SFT.<span class="why">same score, different weights</span></li>
+<li>Sampling is the same as decoding: the policy is the post-softmax distribution; logits are the unnormalised parametrisation and the gradient w.r.t. the logits $z$ is $e_{y_t}-\pi$ (as in the bandit of section 2).<span class="why">softmax score</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Response "New Delhi" with $\pi_\theta(\text{New}\mid x)=0.5$, $\pi_\theta(\text{Delhi}\mid x,\text{New})=0.4$, $\pi_\theta(\texttt{eos}\mid\cdot)=1$: $\pi_\theta(y\mid x)=0.5\cdot0.4=0.2$ and $\log\pi_\theta(y\mid x)=\log0.5+\log0.4=-0.693-0.916=-1.609=\log0.2$. With $R=1$, the sample's gradient is $1\cdot(\nabla\log0.5\text{-term}+\nabla\log0.4\text{-term})$, which raises the probability of both tokens.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Table to know: state = prompt + generated prefix; action = next token; policy = next-token distribution; trajectory = full response (can be truncated for long interactions); reward = response quality/correctness (RLVR: checker, RLHF: learned reward model).</li>
+<li>The policy is the normalised softmax distribution; logits are only the parametrisation.</li>
+</ul></div>
+
+<!-- ============================================================ -->
+<h2 id="is" class="proof-head">7. Importance sampling</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>For densities $p,q$ with $q(x)>0$ wherever $p(x)f(x)\ne0$: $\mathbb E_{x\sim p}[f(x)]=\mathbb E_{x\sim q}\big[\tfrac{p(x)}{q(x)}f(x)\big]$. For trajectories the weight is a product of per-step policy ratios, $\tfrac{p_\theta(\tau)}{p_{\mathrm{old}}(\tau)}=\prod_t\tfrac{\pi_\theta(a_t\mid s_t)}{\pi_{\mathrm{old}}(a_t\mid s_t)}$. Source: Nov 07 (section 11; the trajectory product is <strong>step filled in — not written out in class</strong>). Used to reuse data from a frozen old policy in TRPO/PPO (next sections).</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 780 288" style="max-width:100%;height:auto" role="img" aria-label="Target distribution p and two proposal distributions q over three outcomes with their importance weights">
+  <text x="190" y="18" text-anchor="middle" font-size="13" font-weight="700">q uniform: weights moderate</text>
+  <text x="590" y="18" text-anchor="middle" font-size="13" font-weight="700">q puts only 1% on x₃: weight explodes</text>
+  <line x1="30" y1="170" x2="360" y2="170" stroke="var(--text-3)"/><line x1="420" y1="170" x2="750" y2="170" stroke="var(--text-3)"/>
+  <!-- panel 1 : p = .7 .2 .1 (150px/unit) ; q = 1/3 -->
+  <rect x="55" y="65" width="32" height="105" fill="var(--s1)" opacity=".8"/><rect x="89" y="120" width="32" height="50" fill="var(--s2)" opacity=".8"/>
+  <rect x="165" y="140" width="32" height="30" fill="var(--s1)" opacity=".8"/><rect x="199" y="120" width="32" height="50" fill="var(--s2)" opacity=".8"/>
+  <rect x="275" y="155" width="32" height="15" fill="var(--s1)" opacity=".8"/><rect x="309" y="120" width="32" height="50" fill="var(--s2)" opacity=".8"/>
+  <!-- panel 2 : q = .8 .19 .01 -->
+  <rect x="445" y="65" width="32" height="105" fill="var(--s1)" opacity=".8"/><rect x="479" y="50" width="32" height="120" fill="var(--s2)" opacity=".8"/>
+  <rect x="555" y="140" width="32" height="30" fill="var(--s1)" opacity=".8"/><rect x="589" y="141.5" width="32" height="28.5" fill="var(--s2)" opacity=".8"/>
+  <rect x="665" y="155" width="32" height="15" fill="var(--s1)" opacity=".8"/><rect x="699" y="168.5" width="32" height="1.5" fill="var(--s2)"/>
+  <g font-size="12" text-anchor="middle">
+    <text x="88" y="188">x₁</text><text x="198" y="188">x₂</text><text x="308" y="188">x₃</text>
+    <text x="478" y="188">x₁</text><text x="588" y="188">x₂</text><text x="698" y="188">x₃</text>
+    <text x="88" y="204" class="muted-t">f=1</text><text x="198" y="204" class="muted-t">f=2</text><text x="308" y="204" class="muted-t">f=10</text>
+    <text x="478" y="204" class="muted-t">f=1</text><text x="588" y="204" class="muted-t">f=2</text><text x="698" y="204" class="muted-t">f=10</text>
+    <text x="88" y="222">w=2.1</text><text x="198" y="222">w=0.6</text><text x="308" y="222">w=0.3</text>
+    <text x="478" y="222">w=0.875</text><text x="588" y="222">w=1.05</text><text x="698" y="222" style="fill:var(--s7)" font-weight="700">w=10</text>
+  </g>
+  <g font-size="12" text-anchor="start">
+    <rect x="30" y="244" width="12" height="12" fill="var(--s1)" opacity=".8"/><text x="48" y="255">target p = (0.7, 0.2, 0.1)</text>
+    <rect x="230" y="244" width="12" height="12" fill="var(--s2)" opacity=".8"/><text x="248" y="255">proposal q we can sample from</text>
+    <text x="30" y="276" class="muted-t">w = p/q. Left: Var of the estimate (N=1) = 0.54.     Right: the rare x₃ carries w·f = 100; Var ≈ 97.</text>
+  </g>
+</svg>
+<figcaption class="small muted">Figure 10 — Importance sampling re-weights samples drawn from $q$ by $w=p/q$ so that their average estimates the expectation under $p$. When $q$ rarely visits a place that matters under $p$, a few samples carry huge weights and the estimate becomes noisy.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Write the target expectation as an integral (or sum): $$\mathbb E_{x\sim p}[f(x)]=\int p(x)\,f(x)\,dx$$<span class="why">definition</span></li>
+<li>Multiply and divide by $q(x)$, allowed wherever $q(x)>0$ (support condition: $q$ must cover wherever $p f\ne0$): $$\int p(x)f(x)\,dx=\int q(x)\,\frac{p(x)}{q(x)}\,f(x)\,dx$$<span class="why">multiply by $q/q=1$</span></li>
+<li>The integral is now against $q$, hence an expectation under $q$ with importance weight $w=p/q$: $$\mathbb E_{x\sim p}[f(x)]=\mathbb E_{x\sim q}\Big[\frac{p(X)}{q(X)}\,f(X)\Big]$$<span class="why">change of measure</span></li>
+<li>Estimator: draw $x_i\sim q$ and average $\frac1N\sum_i w(x_i)f(x_i)$; unbiased by step 3.<span class="why">Monte Carlo</span></li>
+<li>Variance (filled in): the mean is $\mathbb E_p f$, so $$\mathrm{Var}_q[wf]=\mathbb E_q[w^2f^2]-(\mathbb E_pf)^2=\mathbb E_p[w\,f^2]-(\mathbb E_pf)^2$$<span class="why">$\mathbb E_q[w^2f^2]=\mathbb E_p[wf^2]$</span> Large $w=p/q$ where $p f^2$ is big makes this large: this is the variance caveat.</li>
+<li><strong>Trajectories.</strong> For policies, take $p=p_\theta$ and $q=p_{\mathrm{old}}$ (a frozen earlier snapshot of the same model). The factors $\rho_0$ and $P$ are identical in both and cancel: $$\frac{p_\theta(\tau)}{p_{\mathrm{old}}(\tau)}=\frac{\rho_0(s_0)\prod_t\pi_\theta(a_t\mid s_t)P(s_{t+1}\mid s_t,a_t)}{\rho_0(s_0)\prod_t\pi_{\mathrm{old}}(a_t\mid s_t)P(s_{t+1}\mid s_t,a_t)}=\prod_t r_t(\theta),\quad r_t(\theta)=\frac{\pi_\theta(a_t\mid s_t)}{\pi_{\mathrm{old}}(a_t\mid s_t)}$$<span class="why">dynamics cancel</span> A product of many ratios drifts far from $1$, which is why PPO works with the per-step ratio $r_t$ and keeps it near $1$.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>$p=(0.7,0.2,0.1)$, $f=(1,2,10)$, so $\mathbb E_pf=0.7+0.4+1.0=2.1$. Uniform $q=(\tfrac13,\tfrac13,\tfrac13)$ gives $w=(2.1,0.6,0.3)$ and $\mathbb E_q[wf]=\tfrac13(2.1+1.2+3.0)=2.1$. Same value, as the identity says. Single-sample variances: sampling directly from $p$: $7.09$; uniform $q$: $0.54$ (a better proposal, since it visits the large-$f$ outcome more often); $q=(0.8,0.19,0.01)$: $w=(0.875,\,1.053,\,10)$, still $\mathbb E_q[wf]=0.7+0.4+1.0=2.1$ but variance $\approx97$.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>The identity is a one-line "multiply and divide by $q$", plus the support condition ($q>0$ wherever $p f\ne0$).</li>
+<li>On-policy: samples come from the policy being optimised. Off-policy: samples come from a behaviour policy such as a frozen earlier snapshot.</li>
+<li>The old policy is the <em>same model</em> frozen earlier, not an unrelated architecture.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Importance sampling is unbiased but not "free": if $q$ is far from $p$, the weights are unreliable and the variance blows up. That is the motivation for keeping $\pi_\theta$ close to $\pi_{\mathrm{old}}$ (TRPO's KL bound, PPO's clip).</p></div>
+
+<!-- ============================================================ -->
+<h2 id="surrogate" class="proof-head">8. The off-policy surrogate and the TRPO constraint</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>The importance-weighted surrogate $L^{\mathrm{IS}}(\theta)=\mathbb E_t[r_t(\theta)\hat A_t]$, with data from $\pi_{\mathrm{old}}$, has at $\theta=\theta_{\mathrm{old}}$ the same gradient as the policy gradient, since $\nabla r_t(\theta_{\mathrm{old}})=\nabla\log\pi_{\theta_{\mathrm{old}}}(a_t\mid s_t)$. TRPO maximises it subject to $\mathbb E_t[D_{\mathrm{KL}}(\pi_{\mathrm{old}}(\cdot\mid s_t)\,\|\,\pi_\theta(\cdot\mid s_t))]\le\delta$. Source: Nov 07 (section 12 and Q&amp;A 13). The derivation from the policy-gradient form is <strong>step filled in — not written out in class</strong>. Used to motivate PPO.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 780 262" style="max-width:100%;height:auto" role="img" aria-label="Left: probability ratio as a function of theta with tangent at theta old. Right: a trust region in parameter space limiting the step.">
+  <defs>
+    <marker id="p08g1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s2)"/></marker>
+  </defs>
+  <text x="190" y="18" text-anchor="middle" font-size="13" font-weight="700">ratio r(θ) = π_θ(a|s) / π_old(a|s)</text>
+  <text x="590" y="18" text-anchor="middle" font-size="13" font-weight="700">trust region in parameter space</text>
+  <line x1="40" y1="200" x2="350" y2="200" stroke="var(--text-3)"/><line x1="40" y1="30" x2="40" y2="200" stroke="var(--text-3)"/>
+  <line x1="40" y1="100" x2="350" y2="100" stroke="var(--text-3)" stroke-dasharray="3 4"/>
+  <path d="M50,182 C120,178 160,140 190,100 C220,60 260,38 340,32" fill="none" stroke="var(--s1)" stroke-width="2.6"/>
+  <line x1="140" y1="166" x2="240" y2="34" stroke="var(--s2)" stroke-width="2" stroke-dasharray="5 3"/>
+  <circle cx="190" cy="100" r="5.5" fill="var(--s2)"/>
+  <text x="196" y="118" font-size="12" font-weight="700">θ_old, r = 1</text>
+  <text x="38" y="104" text-anchor="end" font-size="12">1</text>
+  <text x="250" y="60" font-size="12" style="fill:var(--s2)">slope at θ_old = ∇log π</text>
+  <text x="196" y="218" text-anchor="middle" font-size="12" class="muted-t">θ</text>
+  <text x="190" y="238" text-anchor="middle" font-size="12" class="muted-t">∇r(θ_old) = ∇π/π_old = ∇log π: the PG direction is recovered</text>
+  <ellipse cx="590" cy="118" rx="115" ry="62" fill="var(--accent-soft)" stroke="var(--s1)" stroke-width="2"/>
+  <circle cx="590" cy="118" r="5.5" fill="var(--s2)"/>
+  <text x="590" y="140" text-anchor="middle" font-size="12" font-weight="700">θ_old</text>
+  <line x1="592" y1="116" x2="677" y2="76" stroke="var(--s2)" stroke-width="2.6" marker-end="url(#p08g1)"/>
+  <line x1="680" y1="75" x2="735" y2="49" stroke="var(--s2)" stroke-width="2" stroke-dasharray="5 4"/>
+  <text x="700" y="40" text-anchor="middle" font-size="12" style="fill:var(--s2)">unconstrained</text>
+  <text x="635" y="104" font-size="12" style="fill:var(--s2)">step</text>
+  <text x="590" y="198" text-anchor="middle" font-size="12" class="muted-t">KL(π_old ‖ π_θ) ≤ δ (inside the ellipse: second-order, Fisher metric)</text>
+  <text x="590" y="216" text-anchor="middle" font-size="12" class="muted-t">the step stops at the boundary: r stays near 1, weights stay reliable</text>
+  <text x="390" y="256" text-anchor="middle" font-size="12" class="muted-t">TRPO: maximise inside the ellipse.   PPO: no ellipse, just flatten the objective outside the band on r (section 9).</text>
+</svg>
+<figcaption class="small muted">Figure 11 — Left: the ratio equals 1 at the old parameters and its slope there is the score function, so differentiating the surrogate returns the policy gradient. Right: because the surrogate is only reliable near $\theta_{\mathrm{old}}$, TRPO restricts the update to a KL ball.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Start from the advantage form of section 5, one time step, where the state $s_t$ comes from the old rollouts and $A$ is estimated from them: $$g=\mathbb E_{s}\,\mathbb E_{a\sim\pi_\theta(\cdot\mid s)}\big[\nabla\log\pi_\theta(a\mid s)\,\hat A(s,a)\big]$$<span class="why">section 5</span></li>
+<li>The data were generated by $\pi_{\mathrm{old}}$, not $\pi_\theta$. Apply importance sampling over actions: $$g=\mathbb E_{s}\,\mathbb E_{a\sim\pi_{\mathrm{old}}(\cdot\mid s)}\Big[\frac{\pi_\theta(a\mid s)}{\pi_{\mathrm{old}}(a\mid s)}\,\nabla\log\pi_\theta(a\mid s)\,\hat A(s,a)\Big]$$<span class="why">section 7, $p=\pi_\theta,q=\pi_{\mathrm{old}}$</span></li>
+<li>Use $\pi_\theta\nabla\log\pi_\theta=\nabla\pi_\theta$ and note $\pi_{\mathrm{old}}$ does not depend on $\theta$: $$\frac{\pi_\theta}{\pi_{\mathrm{old}}}\nabla\log\pi_\theta=\frac{\nabla\pi_\theta}{\pi_{\mathrm{old}}}=\nabla r(\theta),\qquad r(\theta)=\frac{\pi_\theta(a\mid s)}{\pi_{\mathrm{old}}(a\mid s)}$$<span class="why">log-derivative trick again</span></li>
+<li>So $g$ is the gradient of the surrogate (with $\hat A$ and the state distribution held fixed): $$g=\nabla_\theta\,\mathbb E_{t}\big[r_t(\theta)\,\hat A_t\big]=\nabla L^{\mathrm{IS}}(\theta)$$<span class="why">$\nabla$ passes through the fixed-data expectation</span> This is the answer to the student's question "where did the log-policy term go?": it is recovered by differentiating the ratio.</li>
+<li>At $\theta=\theta_{\mathrm{old}}$: $r_t=1$ and $\nabla r_t=\nabla\log\pi_{\theta_{\mathrm{old}}}$, so $\nabla L^{\mathrm{IS}}(\theta_{\mathrm{old}})$ equals the on-policy policy gradient exactly. Away from $\theta_{\mathrm{old}}$ the approximation (fixed $\hat A$, old state distribution) degrades.<span class="why">$r(\theta_{\mathrm{old}})=1$</span></li>
+<li>Nothing in $L^{\mathrm{IS}}$ prevents huge steps, and large policy changes can destroy what was learnt in pre-training/SFT and make weights unreliable (section 7). <strong>TRPO</strong> adds a trust region: $$\max_\theta\;\mathbb E_t\big[r_t(\theta)\hat A_t\big]\quad\text{s.t.}\quad\mathbb E_t\big[D_{\mathrm{KL}}\big(\pi_{\mathrm{old}}(\cdot\mid s_t)\,\|\,\pi_\theta(\cdot\mid s_t)\big)\big]\le\delta$$<span class="why">limit policy movement</span></li>
+<li>Extra, standard but not derived in class: near $\theta_{\mathrm{old}}$, $D_{\mathrm{KL}}\approx\tfrac12(\theta-\theta_{\mathrm{old}})^\top F(\theta-\theta_{\mathrm{old}})$ with $F$ the Fisher matrix, so the region is an ellipsoid, as drawn.<span class="why">second-order expansion of KL</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check (bandit: $\pi_{\mathrm{old}}=(\tfrac23,\tfrac13)$, $r=(3,1)$, $V=\tfrac73$, $\hat A=(\tfrac23,-\tfrac43)$)</span>
+<p>Surrogate $L(\theta)=\sum_a\pi_{\mathrm{old}}(a)\,\frac{\pi_\theta(a)}{\pi_{\mathrm{old}}(a)}\hat A_a=\sum_a\pi_\theta(a)\hat A_a$. Its $\theta_1$-derivative at $\theta_{\mathrm{old}}$ is $\sum_a\pi_a\hat A_a(e_a-\pi)_1=\tfrac23\cdot\tfrac23\cdot\tfrac13+\tfrac13\cdot(-\tfrac43)\cdot(-\tfrac23)=\tfrac{12}{27}=\tfrac49$: exactly the policy gradient from section 2. Directly: $\nabla_{\theta_1}r_{a=1}=\pi_1(1-\pi_1)/\pi_{\mathrm{old},1}=1-\pi_1=\tfrac13=\nabla_{\theta_1}\log\pi_1$ at $\theta_{\mathrm{old}}$.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>$r_t(\theta)=\pi_\theta(a_t\mid s_t)/\pi_{\mathrm{old}}(a_t\mid s_t)$; at $\theta_{\mathrm{old}}$: $r=1$ and $\nabla r=\nabla\log\pi$.</li>
+<li>TRPO: surrogate + KL trust region ($\le\delta$). PPO: surrogate + clipping, no explicit constraint.</li>
+<li>Reason for the constraint: stability, not to lose pre-training/SFT behaviour, and to keep importance weights reliable.</li>
+</ul></div>
+
+<!-- ============================================================ -->
+<h2 id="ppo" class="proof-head">9. The PPO clipped objective, case by case</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>$L^{\mathrm{CLIP}}(\theta)=\mathbb E_t\big[\min\big(r_t\hat A_t,\;\mathrm{clip}(r_t,1-\epsilon,1+\epsilon)\hat A_t\big)\big]$ equals $\hat A\min(r,1+\epsilon)$ when $\hat A>0$ and $\hat A\max(r,1-\epsilon)$ when $\hat A\lt 0$; its gradient is $\hat A\nabla r$ when the unclipped branch is active and $0$ otherwise, so there is no incentive to push $r$ beyond the band in the direction that the advantage favours. Source: Nov 07 (section 12). The case analysis is <strong>step filled in — the lecture stated the objective and the intuition but did not tabulate the cases</strong>. Used in RLHF with PPO (actor update).</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 780 312" style="max-width:100%;height:auto" role="img" aria-label="The PPO clipped objective as a function of the ratio for positive advantage and for negative advantage">
+  <text x="200" y="18" text-anchor="middle" font-size="13" font-weight="700">A &gt; 0 (here A = +2): good action</text>
+  <text x="600" y="18" text-anchor="middle" font-size="13" font-weight="700">A &lt; 0 (here A = −2): bad action</text>
+  <!-- panel A: x = 50 + (r-0.4)*250 ; y = 220 - L*45 -->
+  <rect x="150" y="30" width="100" height="196" fill="var(--accent-soft)" opacity=".7"/>
+  <line x1="40" y1="220" x2="360" y2="220" stroke="var(--text-3)"/>
+  <line x1="150" y1="30" x2="150" y2="220" stroke="var(--text-3)" stroke-dasharray="3 3"/><line x1="250" y1="30" x2="250" y2="220" stroke="var(--text-3)" stroke-dasharray="3 3"/>
+  <line x1="200" y1="30" x2="200" y2="220" stroke="var(--text-3)" stroke-width=".8"/>
+  <line x1="50" y1="184" x2="350" y2="76" stroke="var(--text-3)" stroke-width="1.6" stroke-dasharray="6 4"/>
+  <polyline points="50,184 250,112 350,112" fill="none" stroke="var(--s1)" stroke-width="3.2"/>
+  <circle cx="275" cy="112" r="5.5" fill="var(--s2)"/><circle cx="275" cy="103" r="5" fill="none" stroke="var(--text-3)" stroke-width="1.8"/>
+  <!-- values: L at r=1.3: 2.4 -> y=112 ; unclipped 2.6 -> 103 -->
+  <g font-size="12" text-anchor="middle">
+    <text x="150" y="238">0.8</text><text x="200" y="238">1</text><text x="250" y="238">1.2</text><text x="350" y="238">r</text>
+    <text x="150" y="42" class="muted-t">1−ε</text><text x="250" y="42" class="muted-t">1+ε</text>
+  </g>
+  <text x="100" y="100" font-size="11.5" class="muted-t" text-anchor="middle">unclipped rA (dashed)</text>
+  <text x="305" y="140" font-size="12" style="fill:var(--s1)" font-weight="700" text-anchor="middle">flat: gradient 0</text>
+  <text x="95" y="150" font-size="12" style="fill:var(--s1)" font-weight="700" text-anchor="middle">slope A: active</text>
+  <text x="290" y="196" font-size="11.5" text-anchor="middle" class="muted-t">r=1.3: min(2.6, 2.4) = 2.4</text>
+  <text x="200" y="262" text-anchor="middle" font-size="12" class="muted-t">L = A · min(r, 1+ε): stop rewarding once r exceeds 1+ε</text>
+  <!-- panel B: x = 450 + (r-0.4)*250 ; y = 40 + (-L)*45 -->
+  <rect x="550" y="30" width="100" height="196" fill="var(--accent-soft)" opacity=".7"/>
+  <line x1="440" y1="40" x2="760" y2="40" stroke="var(--text-3)"/>
+  <line x1="550" y1="30" x2="550" y2="226" stroke="var(--text-3)" stroke-dasharray="3 3"/><line x1="650" y1="30" x2="650" y2="226" stroke="var(--text-3)" stroke-dasharray="3 3"/>
+  <line x1="600" y1="30" x2="600" y2="226" stroke="var(--text-3)" stroke-width=".8"/>
+  <line x1="450" y1="76" x2="750" y2="184" stroke="var(--text-3)" stroke-width="1.6" stroke-dasharray="6 4"/>
+  <polyline points="450,112 550,112 750,184" fill="none" stroke="var(--s1)" stroke-width="3.2"/>
+  <circle cx="525" cy="112" r="5.5" fill="var(--s2)"/><circle cx="525" cy="103" r="5" fill="none" stroke="var(--text-3)" stroke-width="1.8"/>
+  <g font-size="12" text-anchor="middle">
+    <text x="550" y="58" class="muted-t">1−ε</text><text x="650" y="58" class="muted-t">1+ε</text>
+    <text x="750" y="56">r</text>
+  </g>
+  <text x="498" y="140" font-size="12" style="fill:var(--s1)" font-weight="700" text-anchor="middle">flat: gradient 0</text>
+  <text x="705" y="140" font-size="12" style="fill:var(--s1)" font-weight="700" text-anchor="middle">slope A: active</text>
+  <text x="690" y="112" font-size="11.5" class="muted-t" text-anchor="middle">unclipped rA (dashed)</text>
+  <text x="520" y="196" font-size="11.5" text-anchor="middle" class="muted-t">r=0.7: min(−1.4, −1.6) = −1.6</text>
+  <text x="600" y="262" text-anchor="middle" font-size="12" class="muted-t">L = A · max(r, 1−ε): stop rewarding once r falls below 1−ε</text>
+  <text x="390" y="284" text-anchor="middle" font-size="12" class="muted-t">filled dot: L^CLIP at the marked ratio (the lower branch); hollow dot: the unclipped r·A it replaces.</text><text x="390" y="301" text-anchor="middle" font-size="12" class="muted-t">Shaded band = [1−ε, 1+ε] with ε = 0.2.</text>
+</svg>
+<figcaption class="small muted">Figure 12 — The objective as a function of the ratio (the min picks the lower curve). For a good action the reward for raising $r$ stops at $1+\epsilon$; for a bad action the reward for lowering $r$ stops at $1-\epsilon$. In the opposite direction nothing is clipped, so mistakes are still fully penalised.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Define $\mathrm{clip}(r,1-\epsilon,1+\epsilon)=\min(\max(r,1-\epsilon),1+\epsilon)$: it equals $1-\epsilon$ below the band, $r$ inside, $1+\epsilon$ above. Inside the band the two arguments of the $\min$ coincide: $L=rA$.<span class="why">definition of clip</span></li>
+<li><strong>Case $\hat A>0$.</strong> Multiplying by a positive number keeps the order of $r$ and the clip. If $r\lt 1-\epsilon$: $r\lt \mathrm{clip}=1-\epsilon$, so $\min=rA$. If $r>1+\epsilon$: $\mathrm{clip}=1+\epsilon\lt r$, so $\min=(1+\epsilon)A$. Altogether $$L=\hat A\,\min(r,\,1+\epsilon)$$<span class="why">$A>0$ keeps inequalities</span></li>
+<li><strong>Case $\hat A\lt 0$.</strong> Multiplying by a negative number <em>reverses</em> inequalities. If $r\lt 1-\epsilon$: $rA>(1-\epsilon)A$, so $\min=(1-\epsilon)A$. If $r>1+\epsilon$: $rA\lt (1+\epsilon)A$, so $\min=rA$. Altogether $$L=\hat A\,\max(r,\,1-\epsilon)$$<span class="why">$A&lt;0$ flips inequalities</span></li>
+<li>Gradient. Since $r=\pi_\theta/\pi_{\mathrm{old}}$, $\nabla r=r\,\nabla\log\pi_\theta$. A constant (clipped) branch has zero gradient, so $$\nabla L=\begin{cases}\hat A\,r\,\nabla\log\pi_\theta(a\mid s)&\text{if }(\hat A>0\text{ and }r\lt 1+\epsilon)\text{ or }(\hat A\lt 0\text{ and }r>1-\epsilon)\\[2pt]0&\text{otherwise}\end{cases}$$<span class="why">flat branch has zero slope</span></li>
+<li>Interpretation, $\hat A>0$: raise the probability of the action (increase $r$) until $r=1+\epsilon$; after that the objective is flat, so no further push. $\hat A\lt 0$: lower the probability until $r=1-\epsilon$, then stop. So the policy is not rewarded for moving far from $\pi_{\mathrm{old}}$ in the direction that benefits the sampled action.<span class="why">removes incentive to move far</span></li>
+<li>The other direction stays active: for $\hat A>0$ and $r\lt 1-\epsilon$ (policy made a good action less likely) the gradient is still $\hat A\nabla r$ and corrects the mistake; likewise $\hat A\lt 0$, $r>1+\epsilon$. Equivalently $L^{\mathrm{CLIP}}\le r\hat A$ always (pessimistic lower bound of $L^{\mathrm{IS}}$).<span class="why">min = pessimistic bound</span></li>
+<li>Per-sample objective is averaged over time steps/samples: $L^{\mathrm{CLIP}}(\theta)=\mathbb E_t[\cdot]$. PPO commonly adds a value loss for the critic, an entropy bonus and sometimes a KL penalty/early stopping; $\epsilon$ is tuned (larger: bigger updates, risk of instability; smaller: conservative).<span class="why">practical recipe</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check ($\epsilon=0.2$, band $[0.8,1.2]$)</span>
+<div class="table-wrap"><table>
+<tr><th>$r$</th><th>$\hat A$</th><th>$rA$</th><th>clip$(r)\,A$</th><th>$\min$ (= $L$)</th><th>gradient?</th></tr>
+<tr><td>1.3</td><td>+2</td><td>2.6</td><td>1.2 × 2 = 2.4</td><td><strong>2.4</strong> (clipped)</td><td>0, no incentive to go above 1.2</td></tr>
+<tr><td>0.7</td><td>−2</td><td>−1.4</td><td>0.8 × (−2) = −1.6</td><td><strong>−1.6</strong> (clipped)</td><td>0, no incentive to go below 0.8</td></tr>
+<tr><td>0.7</td><td>+2</td><td>1.4</td><td>0.8 × 2 = 1.6</td><td><strong>1.4</strong> (unclipped)</td><td>active: correct the mistake</td></tr>
+<tr><td>1.3</td><td>−2</td><td>−2.6</td><td>1.2 × (−2) = −2.4</td><td><strong>−2.6</strong> (unclipped)</td><td>active: bad action grew, still penalised</td></tr>
+<tr><td>1.1</td><td>+2</td><td>2.2</td><td>2.2</td><td>2.2 (in band)</td><td>active</td></tr>
+</table></div>
+<p>First two rows are the cases the figure marks. The $\min$ always returns the smaller (more pessimistic) value, never exceeding $rA$.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>$L^{\mathrm{CLIP}}=\mathbb E_t[\min(r_t\hat A_t,\ \mathrm{clip}(r_t,1-\epsilon,1+\epsilon)\hat A_t)]$; for $A>0$ the clip bites at $1+\epsilon$, for $A\lt 0$ at $1-\epsilon$.</li>
+<li>Say it as: "clipping removes the incentive to push the ratio outside $[1-\epsilon,1+\epsilon]$ in the advantageous direction".</li>
+<li>The professor stressed that PPO uses a frozen old policy, the same model snapshot, for rollouts; the current policy is optimised for several steps against it.</li>
+<li>Four roles in a PPO-style RLHF pipeline: actor, old/reference policy, reward model, critic; only the actor is deployed.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Clipping does <strong>not</strong> set the objective to zero outside the band and does <strong>not</strong> guarantee the policy cannot move farther (other samples, momentum, shared parameters can still drag $r$ beyond the band). It only flattens the incentive in one direction; KL monitoring may still be used. Also, do not confuse the two cases: for $A\lt 0$ the active region is $r>1-\epsilon$, not $r\lt 1+\epsilon$.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="summary" class="proof-head">Summary of the proofs on this page</h2>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Result</th><th>Statement</th><th>Key trick</th></tr>
+<tr><td>1</td><td><a href="#trajprob">Trajectory probability</a></td><td>$p_\theta(\tau)=\rho_0\prod\pi_\theta P$</td><td>chain rule + Markov property</td></tr>
+<tr><td>2</td><td><a href="#pgt">Policy-gradient theorem</a></td><td>$\nabla J=\mathbb E[\sum_t\nabla\log\pi\,R(\tau)]$</td><td>$\nabla p=p\nabla\log p$; $\nabla\log\rho_0=\nabla\log P=0$</td></tr>
+<tr><td>3</td><td><a href="#togo">Reward-to-go</a></td><td>$\mathbb E[\nabla\log\pi(a_t\mid s_t)\,r_k]=0$ for $k&lt;t$</td><td>tower property; $\sum_a\nabla\pi=\nabla1=0$</td></tr>
+<tr><td>4</td><td><a href="#baseline">Baseline</a></td><td>$b(s_t)$ leaves the gradient unchanged</td><td>$b$ factors out of $\mathbb E_{a}$; same zero-mean score</td></tr>
+<tr><td>5</td><td><a href="#advantage">Advantage and REINFORCE</a></td><td>$\nabla J=\mathbb E[\sum_t\nabla\log\pi\,A^\pi]$</td><td>$G_t\to Q$ by tower; $b=V$; $Q=r+\gamma\mathbb E V(s')$</td></tr>
+<tr><td>6</td><td><a href="#llm">LLM as policy</a></td><td>$p_\theta(\tau)=\rho_0\,\pi_\theta(y\mid x)$; reward-weighted token scores</td><td>deterministic append transition, $P=1$</td></tr>
+<tr><td>7</td><td><a href="#is">Importance sampling</a></td><td>$\mathbb E_p f=\mathbb E_q[\tfrac pq f]$; trajectory ratio $=\prod r_t$</td><td>multiply and divide by $q$; $\rho_0,P$ cancel</td></tr>
+<tr><td>8</td><td><a href="#surrogate">Surrogate and TRPO</a></td><td>$\nabla L^{\mathrm{IS}}(\theta_{\mathrm{old}})=\nabla J$; KL $\le\delta$</td><td>$\pi\nabla\log\pi=\nabla\pi$, so $\nabla r=\nabla\pi/\pi_{\mathrm{old}}$</td></tr>
+<tr><td>9</td><td><a href="#ppo">PPO clip</a></td><td>$L=A\min(r,1+\epsilon)$ ($A&gt;0$), $A\max(r,1-\epsilon)$ ($A&lt;0$)</td><td>negative $A$ flips inequalities; flat branch has zero gradient</td></tr>
+</table></div>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DGM Proofs — E1 286o Deep Generative Models</title>
+<link rel="stylesheet" href="assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="assets/style.css">
+<script defer src="assets/vendor/katex/katex.min.js"></script>
+<script defer src="assets/vendor/katex/auto-render.min.js"></script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/site.js"></script>
+</head>
+<body data-page="home" data-root=".">
+<main class="content">
+<div class="hero">
+  <div class="kicker">Exam prep · E1 286o Deep Generative Models</div>
+  <h1>Lecture Proofs, Visualised</h1>
+  <p class="lead">Every derivation done in class, rebuilt from the lecture notes as a picture, a numbered chain of steps with the justification for each line, and a worked numeric check. 84 proofs across 9 pages, in lecture order.</p>
+  <div class="meta"><span class="chip">84 proofs</span><span class="chip">Works offline: open index.html</span><span class="chip">Light &amp; dark themes</span><a class="chip" href="#map">Proof map ↓</a></div>
+</div>
+
+<div class="box key"><span class="box-title">How each proof is laid out</span>
+<ol class="small">
+<li><strong>Statement</strong>: what is proved, which lecture, and where it is used later.</li>
+<li><strong>Picture</strong>: an SVG diagram of the mechanism (the thing to sketch in the exam).</li>
+<li><strong>Steps</strong>: one line of algebra per step with a tag for the reason (<span class="why">Jensen</span>, <span class="why">Bayes rule</span>, ...).</li>
+<li><strong>Numeric check</strong>: small concrete numbers that confirm the result.</li>
+<li><strong>Exam box and common mistake</strong>: what the professor stressed and the usual slip.</li>
+</ol></div>
+
+<div class="box pitfall"><span class="box-title">How to read the "filled in" labels</span>
+<p>Where the lecture only stated a result or skipped algebra, the page derives the missing step and labels it <em>step filled in — not written out in class</em>. Where the page corrects the lecture notes (for example a sign, a constant, or which network is updated 5:1), it says so on the page. Check those against your own notes before the exam.</p></div>
+
+<h2 id="pages">The nine pages</h2>
+<div class="grid-3">
+<a class="card" data-req="p01" href="p01_foundations.html"><h4>1 · Foundations</h4><p class="small muted">Sampling, change of variables, KL, LLN, MLE = KL</p><p class="small muted">9 proofs · 9 diagrams · 22 Aug, 29 Aug, 5 Sep</p></a>
+<a class="card" data-req="p02" href="p02_fdiv_gan.html"><h4>2 · f-divergence and GAN</h4><p class="small muted">Jensen, Fenchel conjugate, variational bound, VDM, GAN</p><p class="small muted">11 proofs · 12 diagrams · 29 Aug, 5 Sep</p></a>
+<a class="card" data-req="p03" href="p03_lvm_elbo.html"><h4>3 · Latent variable models</h4><p class="small muted">ELBO two ways, EM, Gaussian mixtures</p><p class="small muted">9 proofs · 9 diagrams · 5 Sep, 12 Sep</p></a>
+<a class="card" data-req="p04" href="p04_vae_ddpm_elbo.html"><h4>4 · VAE, VQ-VAE and the DDPM ELBO</h4><p class="small muted">Reparameterisation, prior sampling, VQ-VAE, Bayes trick, telescoping</p><p class="small muted">12 proofs · 13 diagrams · 19 Sep (+ tutorials)</p></a>
+<a class="card" data-req="p05" href="p05_ddpm_loss.html"><h4>5 · DDPM closed forms and loss</h4><p class="small muted">Marginal, posterior, KL to regression, parameterisations, sampling</p><p class="small muted">7 proofs · 8 diagrams · 3 Oct (+ tutorial)</p></a>
+<a class="card" data-req="p06" href="p06_flow_matching.html"><h4>6 · Flow matching</h4><p class="small muted">Continuity equation, marginalisation theorem, CFM theorem</p><p class="small muted">7 proofs · 8 diagrams · 10 Oct, 17 Oct</p></a>
+<a class="card" data-req="p07" href="p07_attention.html"><h4>7 · Attention and the Transformer</h4><p class="small muted">Scaling, causal mask, multi-head, residual, teacher forcing</p><p class="small muted">13 proofs · 14 diagrams · 17 Oct, 24 Oct</p></a>
+<a class="card" data-req="p08" href="p08_policy_gradient.html"><h4>8 · Policy gradient, IS, PPO</h4><p class="small muted">Policy-gradient theorem, baseline, importance sampling, PPO clip</p><p class="small muted">9 proofs · 12 diagrams · 24 Oct, 7 Nov</p></a>
+<a class="card" data-req="p09" href="p09_rlhf_ssm.html"><h4>9 · Reward model, DPO, GRPO, SSM</h4><p class="small muted">Bradley-Terry, optimal KL policy, DPO, ZOH, convolution</p><p class="small muted">7 proofs · 11 diagrams · 7 Nov, 10 Nov</p></a>
+</div>
+
+<h2 id="map">Proof map</h2>
+<h3 id="map-p01">1. Foundations <span class="muted small">— 22 Aug, 29 Aug, 5 Sep</span></h3>
+<ol class="small"><li><a href="p01_foundations.html#sampling">The sampling principle: push a simple distribution through a function</a></li><li><a href="p01_foundations.html#cov1d">Change of variables in one dimension</a></li><li><a href="p01_foundations.html#covnd">Change of variables in many dimensions (Jacobian)</a></li><li><a href="p01_foundations.html#klidentity">Surprisal, entropy, cross-entropy and KL = H(P,Q) − H(P)</a></li><li><a href="p01_foundations.html#klnonneg">KL divergence is non-negative (and zero only if P = Q)</a></li><li><a href="p01_foundations.html#fdiv">Every f-divergence is non-negative; KL is the case f(u) = u log u</a></li><li><a href="p01_foundations.html#fwdrev">Forward versus reverse KL: which error does each punish?</a></li><li><a href="p01_foundations.html#lln">Law of large numbers: expectations become sample averages</a></li><li><a href="p01_foundations.html#mlekl">Maximum likelihood = minimising the forward KL</a></li></ol>
+<h3 id="map-p02">2. f-divergence and GAN <span class="muted small">— 29 Aug, 5 Sep</span></h3>
+<ol class="small"><li><a href="p02_fdiv_gan.html#fd-nonneg">Non-negativity of the f-divergence</a></li><li><a href="p02_fdiv_gan.html#fd-examples">The f's behind KL, reverse KL, JS, total variation and chi-squared</a></li><li><a href="p02_fdiv_gan.html#conjugate">The Fenchel (convex) conjugate and the representation f = f**</a></li><li><a href="p02_fdiv_gan.html#sup-int">Pushing the supremum outside the integral (variational step)</a></li><li><a href="p02_fdiv_gan.html#var-bound">The variational lower bound on the f-divergence</a></li><li><a href="p02_fdiv_gan.html#vdm">Variational Divergence Minimisation: the min–max problem and its gradients</a></li><li><a href="p02_fdiv_gan.html#gan-f">GAN as a special case of VDM</a></li><li><a href="p02_fdiv_gan.html#opt-d">Optimal discriminator, the value −log 4 and the Jensen–Shannon divergence</a></li><li><a href="p02_fdiv_gan.html#bce">The GAN loss is binary cross-entropy (and the non-saturating generator loss)</a></li><li><a href="p02_fdiv_gan.html#classifier">The classifier-guided interpretation reaches the same objective</a></li><li><a href="p02_fdiv_gan.html#collapse">Why a fixed discriminator is not enough (mode collapse remark)</a></li></ol>
+<h3 id="map-p03">3. Latent variable models <span class="muted small">— 5 Sep, 12 Sep</span></h3>
+<ol class="small"><li><a href="p03_lvm_elbo.html#mle-kl">MLE is minimising forward KL</a></li><li><a href="p03_lvm_elbo.html#intractable">Why the marginal likelihood is intractable</a></li><li><a href="p03_lvm_elbo.html#elbo-jensen">The ELBO via Jensen's inequality</a></li><li><a href="p03_lvm_elbo.html#elbo-gap">The exact gap: log-evidence = ELBO + KL to the posterior</a></li><li><a href="p03_lvm_elbo.html#elbo-forms">Two equivalent forms of the ELBO</a></li><li><a href="p03_lvm_elbo.html#e-m-step">Maximising the ELBO: E-step and M-step</a></li><li><a href="p03_lvm_elbo.html#em-monotone">EM never decreases the likelihood</a></li><li><a href="p03_lvm_elbo.html#gmm-e">Gaussian mixture: the E-step (responsibilities)</a></li><li><a href="p03_lvm_elbo.html#gmm-m">Gaussian mixture: the M-step (means, covariances, weights)</a></li></ol>
+<h3 id="map-p04">4. VAE, VQ-VAE and the DDPM ELBO <span class="muted small">— 19 Sep (+ tutorials)</span></h3>
+<ol class="small"><li><a href="p04_vae_ddpm_elbo.html#vae-elbo">The VAE ELBO and its gap</a></li><li><a href="p04_vae_ddpm_elbo.html#gauss-kl">Closed-form KL: diagonal Gaussian vs standard normal</a></li><li><a href="p04_vae_ddpm_elbo.html#reparam">Reparameterisation trick: why gradients flow</a></li><li><a href="p04_vae_ddpm_elbo.html#prior-sampling">Why sampling from the prior works (role of the KL term)</a></li><li><a href="p04_vae_ddpm_elbo.html#vqvae">VQ-VAE: nearest-neighbour quantisation, straight-through gradient, codebook and commitment loss</a></li><li><a href="p04_vae_ddpm_elbo.html#ddpm-forward">DDPM forward step is Gaussian, Markov, and keeps N(0,I) fixed</a></li><li><a href="p04_vae_ddpm_elbo.html#ddpm-factor">The two joint factorisations</a></li><li><a href="p04_vae_ddpm_elbo.html#ddpm-elbo-start">DDPM ELBO, stage 1: Jensen and expanding the logs</a></li><li><a href="p04_vae_ddpm_elbo.html#ddpm-survive">DDPM ELBO, stage 2: which variables survive each expectation</a></li><li><a href="p04_vae_ddpm_elbo.html#ddpm-bayes">DDPM ELBO, stage 3: the three-variable Bayes-rule trick</a></li><li><a href="p04_vae_ddpm_elbo.html#ddpm-telescope">DDPM ELBO, stage 4: telescoping cancellation</a></li><li><a href="p04_vae_ddpm_elbo.html#ddpm-final">DDPM ELBO, stage 5: assembling the three-term loss</a></li></ol>
+<h3 id="map-p05">5. DDPM closed forms and loss <span class="muted small">— 3 Oct (+ tutorial)</span></h3>
+<ol class="small"><li><a href="p05_ddpm_loss.html#marginal">Closed-form forward marginal</a></li><li><a href="p05_ddpm_loss.html#posterior">The exact forward posterior</a></li><li><a href="p05_ddpm_loss.html#kl">From KL divergence to regression</a></li><li><a href="p05_ddpm_loss.html#epsform">The noise-prediction form of the mean and the simplified loss</a></li><li><a href="p05_ddpm_loss.html#param">Equivalence of the four parameterisations</a></li><li><a href="p05_ddpm_loss.html#sampling">The sampling update</a></li><li><a href="p05_ddpm_loss.html#guidance">Classifier guidance: the score decomposition</a></li></ol>
+<h3 id="map-p06">6. Flow matching <span class="muted small">— 10 Oct, 17 Oct</span></h3>
+<ol class="small"><li><a href="p06_flow_matching.html#flow">Flow ODE, push-forward and the density change</a></li><li><a href="p06_flow_matching.html#continuity">The continuity equation</a></li><li><a href="p06_flow_matching.html#paths">Marginal probability path and its endpoints</a></li><li><a href="p06_flow_matching.html#marginalisation">The marginalisation theorem</a></li><li><a href="p06_flow_matching.html#cfm">The conditional-flow-matching theorem</a></li><li><a href="p06_flow_matching.html#gaussian">Conditional velocity of a Gaussian path (and the straight-line case)</a></li><li><a href="p06_flow_matching.html#euler">Euler (and RK4) sampling from the ODE</a></li></ol>
+<h3 id="map-p07">7. Attention and the Transformer <span class="muted small">— 17 Oct, 24 Oct</span></h3>
+<ol class="small"><li><a href="p07_attention.html#chain">The autoregressive (chain-rule) factorisation is exact</a></li><li><a href="p07_attention.html#rnn">Why recurrence loses long-range gradient and attention does not</a></li><li><a href="p07_attention.html#softlookup">Attention is a soft lookup: a convex combination of values</a></li><li><a href="p07_attention.html#scale">Why divide by the square root of the key dimension</a></li><li><a href="p07_attention.html#causal">The causal mask enforces the autoregressive conditional</a></li><li><a href="p07_attention.html#shapes">Shape bookkeeping and the quadratic cost</a></li><li><a href="p07_attention.html#multihead">Multi-head attention: dimension split and parameter count</a></li><li><a href="p07_attention.html#ffn">Why attention needs a position-wise feed-forward layer</a></li><li><a href="p07_attention.html#residual">Residual connections and the identity gradient path</a></li><li><a href="p07_attention.html#layernorm">Layer normalisation</a></li><li><a href="p07_attention.html#posenc">Positional encoding: why it is needed and the shift property</a></li><li><a href="p07_attention.html#tf">Maximum likelihood = sum of cross-entropies (teacher forcing)</a></li><li><a href="p07_attention.html#decode">Inference: sequential decoding and temperature</a></li></ol>
+<h3 id="map-p08">8. Policy gradient, IS, PPO <span class="muted small">— 24 Oct, 7 Nov</span></h3>
+<ol class="small"><li><a href="p08_policy_gradient.html#trajprob">Probability of a trajectory</a></li><li><a href="p08_policy_gradient.html#pgt">The policy-gradient theorem (log-derivative trick), in four stages</a></li><li><a href="p08_policy_gradient.html#togo">Causality: reward-to-go</a></li><li><a href="p08_policy_gradient.html#baseline">A state-dependent baseline is unbiased (and reduces variance)</a></li><li><a href="p08_policy_gradient.html#advantage">Value, Q, advantage and the REINFORCE update</a></li><li><a href="p08_policy_gradient.html#llm">The LLM as an RL policy</a></li><li><a href="p08_policy_gradient.html#is">Importance sampling</a></li><li><a href="p08_policy_gradient.html#surrogate">The off-policy surrogate and the TRPO constraint</a></li><li><a href="p08_policy_gradient.html#ppo">The PPO clipped objective, case by case</a></li></ol>
+<h3 id="map-p09">9. Reward model, DPO, GRPO, SSM <span class="muted small">— 7 Nov, 10 Nov</span></h3>
+<ol class="small"><li><a href="p09_rlhf_ssm.html#bt">Bradley-Terry reward model and its loss</a></li><li><a href="p09_rlhf_ssm.html#klopt">Closed-form optimum of the KL-regularised objective</a></li><li><a href="p09_rlhf_ssm.html#dpo">Direct Preference Optimization, staged derivation</a></li><li><a href="p09_rlhf_ssm.html#grpo">GRPO: group-relative advantage replaces the critic</a></li><li><a href="p09_rlhf_ssm.html#zoh">SSM discretisation (zero-order hold)</a></li><li><a href="p09_rlhf_ssm.html#conv">Unrolling the recurrence into a convolution</a></li><li><a href="p09_rlhf_ssm.html#s4mamba">S4 kernel generating function and Mamba selectivity</a></li></ol>
+
+<h2 id="chain">How the proofs connect</h2>
+<div class="table-wrap"><table>
+<tr><th>Idea</th><th>First proved</th><th>Reused in</th></tr>
+<tr><td>Jensen's inequality</td><td>Page 1 (KL ≥ 0)</td><td>Pages 2, 3, 4 (f-divergence, ELBO, VAE)</td></tr>
+<tr><td>MLE = minimise forward KL</td><td>Page 1</td><td>Pages 3, 7 (ELBO, teacher forcing)</td></tr>
+<tr><td>ELBO with an approximate posterior</td><td>Page 3</td><td>Pages 4, 5 (VAE, DDPM loss)</td></tr>
+<tr><td>Gaussian KL reduces to a squared distance</td><td>Page 4</td><td>Page 5 (KL to regression)</td></tr>
+<tr><td>Zero-mean baseline</td><td>Page 8 (policy gradient)</td><td>Page 9 (GRPO group baseline)</td></tr>
+<tr><td>KL-regularised optimum</td><td>Page 9</td><td>Closes the course: RLHF to DPO</td></tr>
+</table></div>
+</main>
+</body>
+</html>

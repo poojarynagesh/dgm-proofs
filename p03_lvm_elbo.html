@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Latent variable models: ELBO and EM — DGM Proofs</title>
+<link rel="stylesheet" href="assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="assets/style.css">
+<script defer src="assets/vendor/katex/katex.min.js"></script>
+<script defer src="assets/vendor/katex/auto-render.min.js"></script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/site.js"></script>
+</head>
+<body data-page="p03" data-root=".">
+<main class="content">
+
+<div class="hero">
+  <div class="kicker">Lecture proofs · Sept 05 and Sept 12</div>
+  <h1>Latent variable models: ELBO and EM</h1>
+  <p class="lead">Every derivation from the start of the latent-variable-model block: MLE equals minimising forward KL, why the marginal likelihood is intractable, the ELBO via Jensen, the exact gap to the posterior, the two forms of the ELBO, the E-step and M-step, why EM never decreases the likelihood, and the Gaussian-mixture updates. Each proof has a picture, numbered steps with justifications, and a numerical check.</p>
+</div>
+
+<div class="box key"><span class="box-title">Notation (professor's route)</span>
+<p>Data $x$, latent $z$ (written $Z$ in class), model joint $p_\theta(x,z)=p_\theta(z)\,p_\theta(x\mid z)$, model marginal $p_\theta(x)=\int p_\theta(x,z)\,dz$ (a sum if $z$ is discrete). $q(z\mid x)$ is the arbitrary "variational posterior"; $p_\theta(z\mid x)$ is the true posterior of the model. The ELBO is called $J_\theta(Q)$ in the Sept 05 notes and $\mathcal L(\theta,Q)$ in the Sept 12 notes; here I write $J(\theta,q)$. Steps marked <strong>(step filled in — not written out in class)</strong> were stated or implied in lecture but their algebra was not shown.</p></div>
+
+<div class="box"><span class="box-title">Roadmap</span>
+<ol class="small">
+<li><a href="#mle-kl">MLE is minimising forward KL</a></li>
+<li><a href="#intractable">Why the marginal likelihood is intractable</a></li>
+<li><a href="#elbo-jensen">The ELBO via Jensen's inequality</a></li>
+<li><a href="#elbo-gap">The exact gap: log-evidence = ELBO + KL to the posterior</a></li>
+<li><a href="#elbo-forms">Two equivalent forms of the ELBO</a></li>
+<li><a href="#e-m-step">Maximising the ELBO: E-step and M-step</a></li>
+<li><a href="#em-monotone">EM never decreases the likelihood</a></li>
+<li><a href="#gmm-e">Gaussian mixture: the E-step (responsibilities)</a></li>
+<li><a href="#gmm-m">Gaussian mixture: the M-step (means, covariances, weights)</a></li>
+<li><a href="#summary">Summary table</a></li>
+</ol></div>
+
+<!-- ============================================================ -->
+<h2 id="mle-kl" class="proof-head">1. MLE is minimising forward KL</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>$\arg\min_\theta D_{KL}(P_X\Vert P_\theta)=\arg\max_\theta \mathbb E_{x\sim P_X}[\log P_\theta(x)]$: maximum likelihood <em>is</em> forward-KL minimisation. <em>Source: Sept 05 lecture (also recapped Sept 12). Used for every model that follows: VAEs, diffusion, and LLM training.</em></p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 290" style="max-width:100%;height:auto" role="img" aria-label="Cross-entropy split into data entropy plus KL for three candidate models">
+  <text x="380" y="20" text-anchor="middle" font-size="14" font-weight="700">Cross-entropy = entropy of data + KL  (data P = (0.7, 0.3) on two outcomes)</text>
+  <g font-size="13">
+    <text x="20" y="75">model (0.7, 0.3)</text>
+    <rect x="170" y="55" width="428" height="30" fill="var(--s1)" opacity=".6"/>
+    <text x="384" y="75" text-anchor="middle">H(P) = 0.611</text>
+    <text x="610" y="75" class="muted-t">KL = 0 (best)</text>
+
+    <text x="20" y="145">model (0.5, 0.5)</text>
+    <rect x="170" y="125" width="428" height="30" fill="var(--s1)" opacity=".6"/>
+    <rect x="598" y="125" width="58" height="30" fill="var(--s2)"/>
+    <text x="384" y="145" text-anchor="middle">H(P) = 0.611</text>
+    <text x="668" y="145" class="muted-t">KL = 0.082</text>
+
+    <text x="20" y="215">model (0.9, 0.1)</text>
+    <rect x="170" y="195" width="428" height="30" fill="var(--s1)" opacity=".6"/>
+    <rect x="598" y="195" width="107" height="30" fill="var(--s2)"/>
+    <text x="384" y="215" text-anchor="middle">H(P) = 0.611</text>
+    <text x="712" y="240" text-anchor="end" class="muted-t">KL = 0.154</text>
+  </g>
+  
+  <text x="380" y="282" text-anchor="middle" font-size="12" class="muted-t">bar length = cross-entropy −E[log P_θ(x)] (nats). The blue part never changes with θ; only the orange KL part does.</text>
+</svg>
+<figcaption class="small muted">Figure 1.1 — The data-entropy part is the same for every model, so the ranking of models by cross-entropy (negative log-likelihood) is exactly their ranking by KL.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Definition of the forward KL (data first, model second):
+$$D_{KL}(P_X\Vert P_\theta)=\int P_X(x)\,\log\frac{P_X(x)}{P_\theta(x)}\,dx$$<span class="why">definition</span></li>
+<li>Split the log of a quotient:
+$$D_{KL}(P_X\Vert P_\theta)=\int P_X(x)\log P_X(x)\,dx-\int P_X(x)\log P_\theta(x)\,dx$$<span class="why">$\log\frac ab=\log a-\log b$, linearity of $\int$</span></li>
+<li>The first integral does not contain $\theta$:
+$$\int P_X(x)\log P_X(x)\,dx=-H(P_X)=\text{const in }\theta$$<span class="why">nature fixes the data entropy</span></li>
+<li>Therefore
+$$D_{KL}(P_X\Vert P_\theta)=-H(P_X)-\mathbb E_{x\sim P_X}[\log P_\theta(x)]$$<span class="why">steps 2 and 3, rewrite $\int P_X(\cdot)$ as $\mathbb E_{P_X}$</span></li>
+<li>Minimising a function plus a constant is the same as minimising the function, and minimising $-f$ is maximising $f$:
+$$\theta^*=\arg\min_\theta D_{KL}(P_X\Vert P_\theta)=\arg\max_\theta\ \mathbb E_{x\sim P_X}[\log P_\theta(x)]$$<span class="why">constants do not move the argmin</span></li>
+<li>In practice $P_X$ is only known through samples $x_1,\dots,x_N$, so replace the expectation by the sample mean:
+$$\mathbb E_{P_X}[\log P_\theta(x)]\approx\frac1N\sum_{i=1}^N\log P_\theta(x_i)$$<span class="why">law of large numbers; this is the log-likelihood</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Data $P=(0.7,0.3)$ on two outcomes. Entropy term: $-H(P)=0.7\ln0.7+0.3\ln0.3=-0.611$. Model $(0.5,0.5)$: cross-entropy $=-\ln0.5=0.693$, so $KL=0.693-0.611=0.082$; directly, $0.7\ln\frac{0.7}{0.5}+0.3\ln\frac{0.3}{0.5}=0.2355-0.1532=0.082$. &#10003;. Model $(0.7,0.3)$: cross-entropy $0.611$, $KL=0$. Model $(0.9,0.1)$: cross-entropy $0.765$, $KL=0.154$. The model with the highest expected log-likelihood is the one with the smallest KL.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>The professor: <em>"maximising likelihood is better understood as minimising the KL divergence"</em>; all LLMs are trained by maximum likelihood, i.e. forward KL $D_{KL}(P_X\Vert P_\theta)$.</li>
+<li>The dropped term is the (negative) <strong>entropy of the data</strong>, independent of $\theta$.</li>
+<li>Asked about reverse KL: the asymmetry is real (it motivated F-divergences earlier), but empirically, with good expressive models, forward KL alone works, and this is what all LLMs use.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Writing the KL the other way round, $D_{KL}(P_\theta\Vert P_X)$: then the expectation is under the <em>model</em> and the result is not the log-likelihood. MLE = <em>data first</em> in the KL.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="intractable" class="proof-head">2. Why the marginal likelihood is intractable</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>For a latent variable model, $\log p_\theta(x)=\log\int p_\theta(x,z)\,dz$ and its gradient cannot be computed directly: the integral has no closed form, and the gradient needs the very posterior $p_\theta(z\mid x)$ that requires $p_\theta(x)$. <em>Source: Sept 05 ("The Core Challenge"), Sept 12 (Jensen section). The gradient identity is step filled in. This is the reason every LVM (VAE, diffusion, BERT) optimises a bound.</em></p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 270" style="max-width:100%;height:auto" role="img" aria-label="Graphical model z to x and a latent plane where only a tiny region explains x">
+  <defs><marker id="p03a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <text x="130" y="22" text-anchor="middle" font-size="14" font-weight="700">Generative story</text>
+  <circle cx="130" cy="75" r="26" fill="var(--surface-2)" stroke="var(--s1)" stroke-width="2" stroke-dasharray="5 3"/>
+  <text x="130" y="80" text-anchor="middle" font-size="15">z</text>
+  <circle cx="130" cy="185" r="26" fill="var(--accent-soft)" stroke="var(--s2)" stroke-width="2"/>
+  <text x="130" y="190" text-anchor="middle" font-size="15">x</text>
+  <line x1="130" y1="102" x2="130" y2="157" stroke="var(--text-3)" stroke-width="1.8" marker-end="url(#p03a2)"/>
+  <text x="142" y="134" font-size="12" class="muted-t">p_θ(x|z)</text>
+  <text x="170" y="62" font-size="12" class="muted-t">hidden, prior p_θ(z)</text>
+  <text x="170" y="213" font-size="12" class="muted-t">observed</text>
+  <text x="130" y="248" text-anchor="middle" font-size="12" class="muted-t">p_θ(x) = ∫ p_θ(z) p_θ(x|z) dz</text>
+
+  <text x="520" y="22" text-anchor="middle" font-size="14" font-weight="700">The integral runs over all of z-space</text>
+  <rect x="330" y="38" width="380" height="190" rx="8" fill="var(--surface-2)" stroke="var(--text-3)"/>
+  <ellipse cx="610" cy="150" rx="34" ry="22" fill="var(--s2)" opacity=".55" stroke="var(--s2)"/>
+  <text x="610" y="190" text-anchor="middle" font-size="12" style="fill:var(--s2)">p(x|z) large here</text>
+  <g fill="var(--s1)" opacity=".8">
+    <circle cx="360" cy="70" r="3.5"/><circle cx="410" cy="190" r="3.5"/><circle cx="450" cy="100" r="3.5"/><circle cx="480" cy="60" r="3.5"/><circle cx="520" cy="170" r="3.5"/><circle cx="560" cy="85" r="3.5"/><circle cx="395" cy="125" r="3.5"/><circle cx="500" cy="130" r="3.5"/><circle cx="660" cy="75" r="3.5"/><circle cx="680" cy="195" r="3.5"/><circle cx="440" cy="205" r="3.5"/><circle cx="590" cy="55" r="3.5"/>
+  </g>
+  <text x="520" y="248" text-anchor="middle" font-size="12" class="muted-t">dots = samples z ~ p(z): almost none land where p(x|z) is non-negligible</text>
+</svg>
+<figcaption class="small muted">Figure 2.1 — Left: the model is a marginal over a hidden $z$. Right: the integral is over all of $z$-space; naive sampling from the prior wastes almost every sample.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>The chain rule of probability gives the joint:
+$$p_\theta(x,z)=p_\theta(z)\,p_\theta(x\mid z)$$<span class="why">product rule</span></li>
+<li>The model distribution on data is the marginal:
+$$p_\theta(x)=\int p_\theta(z)\,p_\theta(x\mid z)\,dz\quad\Big(\text{or }\sum_z\Big)$$<span class="why">definition of an LVM</span></li>
+<li>The objective needs the logarithm of this integral:
+$$L(\theta)=\log p_\theta(x)=\log\int p_\theta(z)\,p_\theta(x\mid z)\,dz$$<span class="why">log-likelihood; "log of a sum/integral"</span></li>
+<li>The log cannot be pushed inside the integral: $\log\int f\neq\int\log f$. If the pieces are exponentials, $\sum\log e^{a_k}=\sum a_k$ collapses, but $\log\sum e^{a_k}$ does not. The sum "stays stuck inside the log" (professor's remark), so no closed form and no sample-average form.</li>
+<li>Gradient identity <strong>(step filled in — not written out in class)</strong>. Differentiate the log:
+$$\nabla_\theta\log p_\theta(x)=\frac{1}{p_\theta(x)}\int\nabla_\theta p_\theta(x,z)\,dz$$<span class="why">$\nabla\log u=\nabla u/u$; swap $\nabla$ and $\int$</span></li>
+<li>Use the log-derivative trick $\nabla_\theta p_\theta(x,z)=p_\theta(x,z)\,\nabla_\theta\log p_\theta(x,z)$:
+$$\nabla_\theta\log p_\theta(x)=\int\frac{p_\theta(x,z)}{p_\theta(x)}\,\nabla_\theta\log p_\theta(x,z)\,dz$$<span class="why">$\nabla u=u\nabla\log u$</span></li>
+<li>The weight is the posterior by Bayes' rule:
+$$\nabla_\theta\log p_\theta(x)=\mathbb E_{z\sim p_\theta(z\mid x)}\big[\nabla_\theta\log p_\theta(x,z)\big]$$<span class="why">$\frac{p(x,z)}{p(x)}=p(z\mid x)$</span></li>
+<li>The expectation is under $p_\theta(z\mid x)=p_\theta(x,z)/p_\theta(x)$, whose denominator is the intractable integral itself. The problem is circular: to learn $\theta$ we need the posterior, to get the posterior we need $p_\theta(x)$. This is why a separate distribution $q(z\mid x)$ is introduced.</li>
+<li>Brute-force alternatives fail. A discrete $z\in\{0,1\}^K$ needs $2^K$ terms ($K=30$: about $10^9$). A continuous $z$ with a neural-net decoder gives an integral with no closed form. Monte Carlo over the prior, $\log\frac1S\sum_s p(x\mid z_s)$ with $z_s\sim p(z)$, is a <em>biased</em> estimator of $\log p(x)$ (by Jensen it is a lower bound in expectation) and has huge variance because of Figure 2.1.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>"The integral cannot be solved directly, because we know nothing about $Z$; its distribution is what we are learning jointly."</li>
+<li>Two jobs at once: learn $\theta$ and (implicitly) the latent space, since the data never shows a $z_i$.</li>
+<li>Remedy in every LVM: introduce an auxiliary $q(z\mid x)$ and turn "log of an expectation" into "expectation of a log" (next proof).</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Saying the difficulty is "not knowing the prior". The prior $p(z)$ and decoder $p(x\mid z)$ are model choices and are known. The difficulty is the <em>integral</em> over $z$ of a nonlinear function, inside a $\log$.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="elbo-jensen" class="proof-head">3. The ELBO via Jensen's inequality</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>For any $q(z\mid x)$: $\log p_\theta(x)\ \ge\ J(\theta,q)=\mathbb E_{z\sim q(z\mid x)}\big[\log\frac{p_\theta(x,z)}{q(z\mid x)}\big]$. <em>Source: Sept 05 (full derivation, Steps 1-5); restated Sept 12. Used as the training objective of the VAE, diffusion models and BERT-style models.</em></p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 270" style="max-width:100%;height:auto" role="img" aria-label="Concave log curve with chord showing Jensen gap">
+  <defs><marker id="p03a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <line x1="60" y1="240" x2="730" y2="240" stroke="var(--text-3)"/>
+  <line x1="60" y1="20" x2="60" y2="240" stroke="var(--text-3)"/>
+  <polyline points="100,222 116,198 140,174 180,145 220,125 300,97 380,76 460,61 540,48 620,37 700,28" fill="none" stroke="var(--s1)" stroke-width="2.6"/>
+  <text x="705" y="22" font-size="13" style="fill:var(--s1)">log y</text>
+  <line x1="140" y1="173.5" x2="620" y2="37.3" stroke="var(--s2)" stroke-width="2"/>
+  <circle cx="140" cy="173.5" r="5" fill="var(--s2)"/><circle cx="620" cy="37.3" r="5" fill="var(--s2)"/>
+  <text x="140" y="258" text-anchor="middle" font-size="12">y = 0.5</text>
+  <text x="620" y="258" text-anchor="middle" font-size="12">y = 3.5</text>
+  <line x1="380" y1="76.5" x2="380" y2="240" stroke="var(--text-3)" stroke-dasharray="4 3"/>
+  <text x="380" y="258" text-anchor="middle" font-size="12">E[Y] = 2</text>
+  <circle cx="380" cy="76.5" r="5" fill="var(--s1)"/>
+  <circle cx="380" cy="105.4" r="5" fill="var(--s8)"/>
+  <line x1="392" y1="78" x2="392" y2="104" stroke="var(--s8)" stroke-width="2.4"/>
+  <text x="372" y="160" text-anchor="end" font-size="12.5" style="fill:var(--s8)" font-weight="700">Jensen gap 0.413</text><line x1="330" y1="150" x2="390" y2="100" stroke="var(--s8)" stroke-width="1"/>
+  <text x="250" y="64" text-anchor="end" font-size="12.5" style="fill:var(--s1)">log E[Y] = 0.693 (on the curve)</text>
+  <line x1="256" y1="62" x2="372" y2="75" stroke="var(--s1)" marker-end="url(#p03a3)"/>
+  <text x="500" y="165" font-size="12.5" style="fill:var(--s2)">E[log Y] = 0.280 (on the chord)</text>
+  <line x1="496" y1="162" x2="388" y2="108" stroke="var(--s2)" marker-end="url(#p03a3)"/>
+  <text x="400" y="14" text-anchor="middle" font-size="12" class="muted-t">Y takes values 0.5 and 3.5 with prob 1/2 each; the chord lies below the concave curve</text>
+</svg>
+<figcaption class="small muted">Figure 3.1 — Jensen for a concave function: the average of the function values (a point on the chord) is below the function of the average (a point on the curve). In the ELBO, $Y=p_\theta(x,z)/q(z\mid x)$.</figcaption>
+</figure>
+
+<p><strong>Lemma (Jensen for $\log$, step filled in — only the statement was given in class).</strong> For a random variable $Y>0$ with mean $m=\mathbb E[Y]$: $\mathbb E[\log Y]\le\log\mathbb E[Y]$.</p>
+<ol class="steps">
+<li>A concave differentiable function lies below its tangent at $m$; for $\log$ the tangent at $m$ is $\log m+\frac{y-m}{m}$:
+$$\log y\ \le\ \log m+\frac{y-m}{m}\quad\text{for all }y>0$$<span class="why">concavity of $\log$</span></li>
+<li>Put $y=Y$ and take the expectation of both sides:
+$$\mathbb E[\log Y]\le\log m+\frac{\mathbb E[Y]-m}{m}$$<span class="why">monotonicity and linearity of $\mathbb E$</span></li>
+<li>Since $\mathbb E[Y]=m$ the last term vanishes: $\mathbb E[\log Y]\le\log\mathbb E[Y]$. Equality needs $\log Y$ to equal its tangent almost surely, which (strict concavity) happens iff $Y=m$ almost surely.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<p><strong>Theorem: ELBO.</strong></p>
+<ol class="steps">
+<li>Start from the log-evidence:
+$$L(\theta)=\log p_\theta(x)=\log\int p_\theta(x,z)\,dz$$<span class="why">LVM definition</span></li>
+<li>Multiply and divide by $q(z\mid x)$ inside the integral (assume $q>0$ wherever $p_\theta(x,z)>0$):
+$$L(\theta)=\log\int q(z\mid x)\,\frac{p_\theta(x,z)}{q(z\mid x)}\,dz$$<span class="why">multiply and divide by $q$ (importance weighting)</span></li>
+<li>Recognise $\int q(z\mid x)\,g(z)\,dz$ as an expectation under $q$:
+$$L(\theta)=\log\mathbb E_{z\sim q(z\mid x)}\!\left[\frac{p_\theta(x,z)}{q(z\mid x)}\right]$$<span class="why">definition of expectation</span></li>
+<li>Apply Jensen with $Y=\frac{p_\theta(x,z)}{q(z\mid x)}$ (concave $\log$, so log of expectation is at least expectation of log):
+$$\log\mathbb E_{q}\!\left[\frac{p_\theta(x,z)}{q(z\mid x)}\right]\ \ge\ \mathbb E_{q}\!\left[\log\frac{p_\theta(x,z)}{q(z\mid x)}\right]$$<span class="why">Jensen: $\log$ concave</span></li>
+<li>Name the right-hand side the Evidence Lower BOund:
+$$\log p_\theta(x)\ \ge\ J(\theta,q)=\mathbb E_{q(z\mid x)}\big[\log p_\theta(x,z)-\log q(z\mid x)\big]$$<span class="why">definition; $\log$ of quotient</span></li>
+<li>Equality condition <strong>(step filled in)</strong>: by the Lemma, equality iff $Y=\frac{p_\theta(x,z)}{q(z\mid x)}$ is constant in $z$. That constant must equal $\mathbb E_q[Y]=p_\theta(x)$, so $q(z\mid x)=p_\theta(x,z)/p_\theta(x)=p_\theta(z\mid x)$, the true posterior.</li>
+<li>For a dataset, sum over points: $\sum_i\log p_\theta(x_i)\ge\sum_iJ(\theta,q_i)$, each $x_i$ having its own $q_i(z\mid x_i)$.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check: a 2-component mixture, one observation</span>
+<p>Prior $p(z{=}1)=0.3,\ p(z{=}2)=0.7$; likelihoods $x\mid z{=}1\sim\mathcal N(0,1)$, $x\mid z{=}2\sim\mathcal N(3,1)$; observed $x=2$. Joints: $p(x,1)=0.3\cdot0.05399=0.016197$, $p(x,2)=0.7\cdot0.24197=0.169379$. Evidence: $p(x)=0.185577$, so $\log p(x)=-1.6843$.</p>
+<p>Take $q=(0.5,0.5)$. Then $Y_k=p(x,k)/q_k=(0.032395,\,0.338759)$; $\mathbb E_q[Y]=0.185577=p(x)$ &#10003;, $\log\mathbb E_q[Y]=-1.6843$, while $\mathbb E_q[\log Y]=\tfrac12(-3.4296-1.0828)=-2.2561$. So $J=-2.256\le-1.684$ as Jensen demands. The ELBO is computable with a sum over only two terms of $\log$, no log of a sum.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Steps in order: multiply and divide by $Q$, recognise an expectation, apply Jensen ($\log$ is concave), name the result the ELBO. Say "evidence" for $\log p_\theta(x)$.</li>
+<li>Motivation to state: samples can approximate expectations of logs (sums of logs, tractable) but not logs of expectations.</li>
+<li>The general LVM problem, "the holy grail": $\theta^*,Q^*=\arg\max_{\theta,Q}\mathbb E_{Q}\big[\log\frac{P_\theta(x,z)}{Q(z\mid x)}\big]$.</li>
+<li>VAEs, diffusion models and BERT-family models are all "ELBO optimisers".</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Getting the direction wrong: for the concave $\log$, $\log\mathbb E[Y]\ge\mathbb E[\log Y]$. (For convex functions, such as $y^2$, the inequality flips.) Also: the bound holds for <em>every</em> $q$, not just a good one; $q$ is arbitrary but must cover the support of $p_\theta(x,z)$.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="elbo-gap" class="proof-head">4. The exact gap: log-evidence = ELBO + KL to the posterior</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>$\log p_\theta(x)=J(\theta,q)+D_{KL}\big(q(z\mid x)\,\Vert\,p_\theta(z\mid x)\big)$. Hence $J\le\log p_\theta(x)$, with equality iff $q(z\mid x)=p_\theta(z\mid x)$. <em>Source: the bound is Sept 05/12; the exact identity and the "equality iff posterior" statement are step filled in (implicit in the lecture's "the ELBO is tight when the approximation is good" and the E-step). Used in the VAE, in EM, and in variational inference generally.</em></p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 310" style="max-width:100%;height:auto" role="img" aria-label="Number line of log evidence and three ELBO values with KL gaps">
+  <defs><marker id="p03a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s8)"/></marker></defs>
+  <text x="380" y="20" text-anchor="middle" font-size="14" font-weight="700">Same model, same x = 2, three different q: how far below log p(x) is the ELBO?</text>
+  <line x1="679" y1="34" x2="679" y2="270" stroke="var(--s3)" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="679" y="290" text-anchor="middle" font-size="12.5" style="fill:var(--s3)" font-weight="700">log p(x) = −1.684</text>
+  <g font-size="12.5">
+    <text x="209" y="52" text-anchor="middle">q = (0.9, 0.1): ELBO −3.563</text>
+    <circle cx="209" cy="72" r="6" fill="var(--s1)"/>
+    <line x1="217" y1="72" x2="670" y2="72" stroke="var(--s8)" stroke-width="2" marker-end="url(#p03a4)"/>
+    <text x="440" y="94" text-anchor="middle" style="fill:var(--s8)">gap = KL(q‖posterior) = 1.879</text>
+
+    <text x="536" y="132" text-anchor="middle">q = (0.5, 0.5): ELBO −2.256</text>
+    <circle cx="536" cy="152" r="6" fill="var(--s1)"/>
+    <line x1="544" y1="152" x2="670" y2="152" stroke="var(--s8)" stroke-width="2" marker-end="url(#p03a4)"/>
+    <text x="606" y="174" text-anchor="middle" style="fill:var(--s8)">gap 0.572</text>
+
+    <text x="660" y="212" text-anchor="end">q = posterior (0.087, 0.913): ELBO −1.684, gap 0</text>
+    <circle cx="679" cy="232" r="6" fill="var(--s1)"/>
+  </g>
+</svg>
+<figcaption class="small muted">Figure 4.1 — The gap between the evidence (dashed green) and the ELBO (blue dot) is exactly $D_{KL}(q\Vert p_\theta(z\mid x))$; it vanishes only at the posterior.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Bayes' rule for the model's own joint:
+$$p_\theta(x,z)=p_\theta(z\mid x)\,p_\theta(x)$$<span class="why">definition of conditional probability</span></li>
+<li>Insert into the ELBO:
+$$J(\theta,q)=\mathbb E_{q}\Big[\log\frac{p_\theta(z\mid x)\,p_\theta(x)}{q(z\mid x)}\Big]$$<span class="why">step 1 substituted</span></li>
+<li>Split the log of a product:
+$$J(\theta,q)=\mathbb E_{q}\big[\log p_\theta(x)\big]+\mathbb E_{q}\Big[\log\frac{p_\theta(z\mid x)}{q(z\mid x)}\Big]$$<span class="why">$\log(ab)=\log a+\log b$, linearity of $\mathbb E$</span></li>
+<li>The first term does not depend on $z$, and $q$ integrates to 1:
+$$\mathbb E_{q}\big[\log p_\theta(x)\big]=\log p_\theta(x)$$<span class="why">expectation of a constant</span></li>
+<li>The second term is minus a KL:
+$$\mathbb E_{q}\Big[\log\frac{p_\theta(z\mid x)}{q(z\mid x)}\Big]=-D_{KL}\big(q(z\mid x)\Vert p_\theta(z\mid x)\big)$$<span class="why">definition of KL (flip the quotient, flip the sign)</span></li>
+<li>Combine and rearrange:
+$$\log p_\theta(x)=J(\theta,q)+D_{KL}\big(q(z\mid x)\Vert p_\theta(z\mid x)\big)$$<span class="why">steps 3-5</span></li>
+<li>KL is non-negative (Gibbs' inequality). Proof by the Jensen Lemma of Proof 3:
+$$-D_{KL}(q\Vert p)=\mathbb E_q\Big[\log\frac pq\Big]\le\log\mathbb E_q\Big[\frac pq\Big]=\log\int p(z\mid x)\,dz=\log1=0$$<span class="why">Jensen; $p/q$ integrates against $q$ to $\int p=1$</span></li>
+<li>Equality in step 7 holds iff $p/q$ is constant, and the constant must be 1: so $D_{KL}=0\iff q=p_\theta(z\mid x)$.</li>
+<li>Conclude: $J(\theta,q)=\log p_\theta(x)-D_{KL}(\dots)\le\log p_\theta(x)$, with equality iff $q(z\mid x)=p_\theta(z\mid x)$. This also reproves the ELBO bound without a separate Jensen step on the joint.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check (same mixture, $x=2$)</span>
+<p>Posterior: $p(z{=}1\mid x)=0.016197/0.185577=0.0873$, $p(z{=}2\mid x)=0.9127$.</p>
+<div class="table-wrap"><table>
+<tr><th>$q=(q_1,q_2)$</th><th>ELBO $J$</th><th>$D_{KL}(q\Vert p(z\mid x))$</th><th>$J+KL$</th></tr>
+<tr><td>$(0.5,\,0.5)$</td><td>$-2.2561$</td><td>$0.5718$</td><td>$-1.6843$ &#10003;</td></tr>
+<tr><td>$(0.9,\,0.1)$</td><td>$-3.5631$</td><td>$1.8788$</td><td>$-1.6843$ &#10003;</td></tr>
+<tr><td>$(0.0873,\,0.9127)$ (posterior)</td><td>$-1.6843$</td><td>$0$</td><td>$-1.6843$ &#10003;</td></tr>
+</table></div>
+<p>E.g. $KL$ for the uniform $q$: $0.5\ln\frac{0.5}{0.0873}+0.5\ln\frac{0.5}{0.9127}=0.8727-0.3009=0.5718$.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>The ELBO is "tight" exactly when $Q$ equals the true latent posterior $P_\theta(Z\mid X)$; the lost amount is a KL.</li>
+<li>Do not confuse the two distributions: $Q(Z\mid X)$ is the learned approximation; $P_\theta(Z\mid X)$ is the model's own (intractable) posterior. The professor: they are different objects.</li>
+<li>Maximising the ELBO over $q$ is the same as minimising $KL(q\Vert p_\theta(z\mid x))$ because $\log p_\theta(x)$ does not depend on $q$.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Writing the gap as $D_{KL}(p_\theta(z\mid x)\Vert q)$. The correct direction is $q$ first (the expectation is under $q$, since we integrate against $q$ in the ELBO).</p></div>
+
+<!-- ============================================================ -->
+<h2 id="elbo-forms" class="proof-head">5. Two equivalent forms of the ELBO</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>$J(\theta,q)=\mathbb E_q[\log p_\theta(x\mid z)]-D_{KL}\big(q(z\mid x)\Vert p_\theta(z)\big)$ (reconstruction minus KL to the prior) and $J(\theta,q)=\mathbb E_q[\log p_\theta(x,z)]+H(q)$ (expected complete-data log-likelihood plus entropy). <em>Source: Sept 12 lecture (the first form); the entropy form is step filled in and is the one used by the M-step. The first form is the VAE objective.</em></p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 250" style="max-width:100%;height:auto" role="img" aria-label="Two ways to split the ELBO into two terms">
+  <defs><marker id="p03a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <text x="380" y="20" text-anchor="middle" font-size="14" font-weight="700">ELBO, two views</text>
+  <g font-size="13" text-anchor="middle">
+    <rect x="20" y="40" width="200" height="56" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="120" y="63">E_q[ log p(x|z) ]</text><text x="120" y="82" class="muted-t" font-size="11.5">reconstruction: explain x</text>
+    <text x="250" y="73" font-size="20">−</text>
+    <rect x="280" y="40" width="210" height="56" rx="8" fill="var(--surface-2)" stroke="var(--s2)"/><text x="385" y="63">KL( q(z|x) ‖ p(z) )</text><text x="385" y="82" class="muted-t" font-size="11.5">regulariser: stay near prior</text>
+    <text x="520" y="73" font-size="20">=</text>
+    <rect x="550" y="40" width="190" height="56" rx="8" fill="var(--surface-2)" stroke="var(--s3)" stroke-width="2"/><text x="645" y="73" font-weight="700">ELBO J(θ,q)</text>
+
+    <rect x="20" y="140" width="200" height="56" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="120" y="163">E_q[ log p(x,z) ]</text><text x="120" y="182" class="muted-t" font-size="11.5">complete-data log-lik (M-step)</text>
+    <text x="250" y="173" font-size="20">+</text>
+    <rect x="280" y="140" width="210" height="56" rx="8" fill="var(--surface-2)" stroke="var(--s7)"/><text x="385" y="163">H(q) = −E_q[ log q ]</text><text x="385" y="182" class="muted-t" font-size="11.5">entropy of q (no θ in it)</text>
+    <text x="520" y="173" font-size="20">=</text>
+    <rect x="550" y="140" width="190" height="56" rx="8" fill="var(--surface-2)" stroke="var(--s3)" stroke-width="2"/><text x="645" y="173" font-weight="700">ELBO J(θ,q)</text>
+  </g>
+  <text x="380" y="230" text-anchor="middle" font-size="12" class="muted-t">both come from splitting log[ p(x,z) / q ] in a different place</text>
+</svg>
+<figcaption class="small muted">Figure 5.1 — Same quantity, two splits. Top (split the joint into likelihood times prior): the VAE view. Bottom (split numerator from denominator): the EM view.</figcaption>
+</figure>
+
+<p><strong>Form A: reconstruction minus KL.</strong></p>
+<ol class="steps">
+<li>Start from the ELBO:
+$$J(\theta,q)=\mathbb E_{q}\Big[\log\frac{p_\theta(x,z)}{q(z\mid x)}\Big]$$<span class="why">definition (Proof 3)</span></li>
+<li>Factor the joint as likelihood times prior:
+$$p_\theta(x,z)=p_\theta(x\mid z)\,p_\theta(z)$$<span class="why">chain rule</span></li>
+<li>Split the log of the product:
+$$J=\mathbb E_{q}\big[\log p_\theta(x\mid z)\big]+\mathbb E_{q}\Big[\log\frac{p_\theta(z)}{q(z\mid x)}\Big]$$<span class="why">$\log(ab)=\log a+\log b$; linearity of $\mathbb E$</span></li>
+<li>The second term is minus the KL of $q$ from the prior:
+$$J=\mathbb E_{q}\big[\log p_\theta(x\mid z)\big]-D_{KL}\big(q(z\mid x)\Vert p_\theta(z)\big)$$<span class="why">definition of KL</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<p><strong>Form B: complete-data term plus entropy.</strong></p>
+<ol class="steps">
+<li>Split the log of the quotient:
+$$J=\mathbb E_{q}\big[\log p_\theta(x,z)-\log q(z\mid x)\big]$$<span class="why">$\log\frac ab=\log a-\log b$</span></li>
+<li>Separate the two expectations:
+$$J=\mathbb E_{q}\big[\log p_\theta(x,z)\big]-\mathbb E_{q}\big[\log q(z\mid x)\big]$$<span class="why">linearity of $\mathbb E$</span></li>
+<li>The second piece is the entropy of $q$:
+$$J=\mathbb E_{q}\big[\log p_\theta(x,z)\big]+H(q),\qquad H(q)=-\mathbb E_q[\log q]$$<span class="why">definition of entropy; note $H(q)$ has no $\theta$</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check (mixture, $x=2$)</span>
+<p>$q=(0.5,0.5)$: reconstruction $\mathbb E_q[\log p(x\mid z)]=0.5(\ln0.05399+\ln0.24197)=0.5(-2.9189-1.4189)=-2.1689$; $KL(q\Vert\text{prior}(0.3,0.7))=0.5\ln\frac{0.5}{0.3}+0.5\ln\frac{0.5}{0.7}=0.2554-0.1682=0.0872$. Form A: $-2.1689-0.0872=-2.2561$ &#10003;. Form B: $\mathbb E_q[\log p(x,z)]=0.5(-4.1228-1.7753)=-2.9491$, $H(q)=\ln2=0.6931$, sum $-2.2560$ &#10003;. At the posterior: reconstruction $-1.5499$, $KL$ to prior $0.1344$, ELBO $-1.6843$ &#10003;.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Reconstruction term "encourages the latent to explain the observed data"; KL term "keeps the variational posterior close to the prior over latents". This is the same pattern as the VAE loss.</li>
+<li>A third form is Proof 4: $J=\log p_\theta(x)-D_{KL}(q\Vert p_\theta(z\mid x))$. Pick the form that makes the quantity you need explicit.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Using $\log p(x,z)$ (instead of $\log p(x\mid z)$) in the "reconstruction" term, or forgetting that the KL is to the <em>prior</em> $p_\theta(z)$, not to the posterior; the KL-to-posterior belongs to the gap formula of Proof 4.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="e-m-step" class="proof-head">6. Maximising the ELBO: E-step and M-step</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>(E) For fixed $\theta_t$, $J(\theta_t,q)$ is maximised over $q$ by $q^{t+1}(z\mid x)=p_{\theta_t}(z\mid x)$, with maximum value $\log p_{\theta_t}(x)$. (M) For fixed $q$, $\arg\max_\theta J(\theta,q)=\arg\max_\theta\mathbb E_q[\log p_\theta(x,z)]$. <em>Source: Sept 12 ("Optimization Strategy" and "The EM Algorithm", which names the steps but does not write out the maximisers; both derivations here are step filled in.)</em></p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 312" style="max-width:100%;height:auto" role="img" aria-label="ELBO as a function of q1 peaking at the posterior and touching log p(x)">
+  <line x1="80" y1="262" x2="690" y2="262" stroke="var(--text-3)"/>
+  <line x1="80" y1="20" x2="80" y2="262" stroke="var(--text-3)"/>
+  <line x1="80" y1="37.6" x2="690" y2="37.6" stroke="var(--s3)" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="692" y="41" font-size="12" style="fill:var(--s3)">log p(x)</text>
+  <polyline points="80,46 92,41 110,38.5 132,37.6 140,37.7 200,43 260,54 320,70 380,89 440,112 500,139 560,170 620,207 650,229 668,244 680,252" fill="none" stroke="var(--s1)" stroke-width="2.6"/>
+  <circle cx="132" cy="37.6" r="6" fill="var(--s1)"/>
+  <text x="140" y="26" font-size="12.5" font-weight="700" style="fill:var(--s1)">E-step: q* = posterior (q₁ = 0.087), J = log p(x)</text>
+  <circle cx="380" cy="89" r="5" fill="var(--s2)"/>
+  <text x="392" y="85" font-size="12.5" style="fill:var(--s2)">q = (0.5, 0.5): J = −2.256</text>
+  <line x1="380" y1="89" x2="380" y2="40" stroke="var(--s8)" stroke-width="2" stroke-dasharray="3 3"/>
+  <text x="456" y="62" font-size="12.5" style="fill:var(--s8)">gap = KL(q‖posterior)</text>
+  <g font-size="12" text-anchor="middle">
+    <text x="80" y="278">0</text><text x="380" y="278">0.5</text><text x="680" y="278">1</text>
+  </g>
+  <text x="385" y="304" text-anchor="middle" font-size="12" class="muted-t">q₁ = q(z=1|x) (the 2-component mixture, x = 2); ELBO J(θ,q) on the vertical axis</text>
+</svg>
+<figcaption class="small muted">Figure 6.1 — For fixed $\theta$ the ELBO as a function of $q$ is a hill whose peak touches the horizontal line $\log p_\theta(x)$, and the peak sits at the posterior. The E-step jumps to the top of the hill.</figcaption>
+</figure>
+
+<p><strong>E-step.</strong></p>
+<ol class="steps">
+<li>Fix $\theta=\theta_t$. From Proof 4:
+$$J(\theta_t,q)=\log p_{\theta_t}(x)-D_{KL}\big(q(z\mid x)\Vert p_{\theta_t}(z\mid x)\big)$$<span class="why">gap identity</span></li>
+<li>$\log p_{\theta_t}(x)$ is a constant with respect to $q$. Hence
+$$\arg\max_qJ(\theta_t,q)=\arg\min_q D_{KL}\big(q\Vert p_{\theta_t}(z\mid x)\big)$$<span class="why">constant drops out; maximising $-f$ is minimising $f$</span></li>
+<li>$KL\ge0$ with equality iff the arguments agree, so the unique minimiser is
+$$q^{t+1}(z\mid x)=p_{\theta_t}(z\mid x)=\frac{p_{\theta_t}(x,z)}{p_{\theta_t}(x)}$$<span class="why">Gibbs inequality, Proof 4 step 8</span></li>
+<li>The value attained is $J(\theta_t,q^{t+1})=\log p_{\theta_t}(x)$: the bound is tight at the current $\theta$.</li>
+</ol>
+
+<p><strong>M-step.</strong></p>
+<ol class="steps">
+<li>Fix $q=q^{t+1}$ and use form B of Proof 5:
+$$J(\theta,q^{t+1})=\mathbb E_{q^{t+1}}\big[\log p_\theta(x,z)\big]+H(q^{t+1})$$<span class="why">entropy form</span></li>
+<li>$H(q^{t+1})$ does not depend on $\theta$, so
+$$\theta_{t+1}=\arg\max_\theta\ \underbrace{\mathbb E_{z\sim p_{\theta_t}(z\mid x)}\big[\log p_\theta(x,z)\big]}_{\mathcal Q(\theta\mid\theta_t)}$$<span class="why">constant drops out of the argmax</span></li>
+<li>For a dataset: $\mathcal Q(\theta\mid\theta_t)=\sum_{i=1}^N\mathbb E_{z\sim p_{\theta_t}(z\mid x_i)}[\log p_\theta(x_i,z)]$. This is the <em>expected complete-data log-likelihood</em>: the latent variable is "filled in" by its posterior, then we do ordinary maximum likelihood on the completed data, which is usually easy because $\log p_\theta(x,z)$ has no log-of-sum.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>E-step on the single-point mixture ($x=2$): moving from $q=(0.5,0.5)$ to the posterior $(0.0873,0.9127)$ raises the ELBO from $-2.2561$ to $-1.6843=\log p(x)$ (the gap $0.5718$ is removed). M-step: see Proof 9, where the three-point dataset has $J(\theta_0,q)=-5.818$ before and $J(\theta_1,q)=-4.074$ after the M-step with $q$ held fixed.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Strategy: alternate. Fix $\theta$, optimise $Q$ (this is the <em>Expectation</em> step); fix $Q$, optimise $\theta$ (this is the <em>Maximisation</em> step). Repeat until convergence.</li>
+<li>Optimal $Q$ at fixed $\theta$ is the exact posterior $P_\theta(Z\mid X)$. For GMM it is available in closed form; for a VAE it is not, so $Q$ is approximated by an encoder network.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>The M-step maximises over $\theta$ only; the expectation is under the <em>old</em> posterior $p_{\theta_t}(z\mid x)$, which is held fixed even though $\theta$ changes inside $\log p_\theta(x,z)$.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="em-monotone" class="proof-head">7. EM never decreases the likelihood</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>The EM iterates satisfy $\log p_{\theta_{t+1}}(x)\ge\log p_{\theta_t}(x)$. <em>Source: Sept 12 — the professor said "the proof of convergence is standard" without writing it; the whole argument is step filled in. Justifies using EM, and its VAE-era relatives, as a safe optimiser.</em></p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 290" style="max-width:100%;height:auto" role="img" aria-label="EM zig-zag between lower-bound curves and the log-likelihood">
+  <line x1="60" y1="260" x2="720" y2="260" stroke="var(--text-3)"/>
+  <line x1="60" y1="30" x2="60" y2="260" stroke="var(--text-3)"/>
+  <polyline points="60,240 100,210 140,185 180,164 220,147 260,133 300,120 340,110 380,102 420,95 460,89 500,84 540,80 580,77 620,74 660,72 700,70" fill="none" stroke="var(--s1)" stroke-width="3"/>
+  <text x="640" y="62" font-size="13" font-weight="700" style="fill:var(--s1)">log p_θ(x)</text>
+  <polyline points="65,239 80,226 95,214 110,203 125,194 140,187 155,180 170,175 185,171 200,169 215,168 230,168 245,170 260,173 275,178 290,183 305,190" fill="none" stroke="var(--s2)" stroke-width="2" stroke-dasharray="6 3"/>
+  <polyline points="158,183 173,172 188,163 203,154 218,148 233,142 248,138 263,136 278,134 293,135 308,136 323,139 338,143 353,148 368,155" fill="none" stroke="var(--s7)" stroke-width="2" stroke-dasharray="6 3"/>
+  <text x="305" y="205" font-size="12" style="fill:var(--s2)">bound J(θ, q₁)</text>
+  <text x="372" y="172" font-size="12" style="fill:var(--s7)">bound J(θ, q₂)</text>
+  <circle cx="110" cy="203" r="5" fill="var(--s1)"/>
+  <text x="110" y="278" text-anchor="middle" font-size="12">θ₀</text>
+  <circle cx="219" cy="168" r="5" fill="var(--s2)"/>
+  <line x1="219" y1="168" x2="219" y2="150" stroke="var(--s8)" stroke-width="2"/>
+  <circle cx="219" cy="148" r="5" fill="var(--s1)"/>
+  <text x="219" y="278" text-anchor="middle" font-size="12">θ₁</text>
+  <circle cx="285" cy="134" r="5" fill="var(--s7)"/>
+  <line x1="285" y1="134" x2="285" y2="126" stroke="var(--s8)" stroke-width="2"/>
+  <circle cx="285" cy="125" r="5" fill="var(--s1)"/>
+  <text x="285" y="278" text-anchor="middle" font-size="12">θ₂</text>
+  <text x="120" y="226" font-size="11.5" class="muted-t">E: bound touches</text>
+  <text x="120" y="240" font-size="11.5" class="muted-t">curve at θ₀</text>
+  <text x="232" y="160" font-size="11.5" style="fill:var(--s8)">gain</text>
+  <text x="400" y="240" font-size="12.5" class="muted-t">M: climb the bound to its peak. Bound ≤ curve, so</text>
+  <text x="400" y="256" font-size="12.5" class="muted-t">the curve is higher still at the new θ.</text>
+</svg>
+<figcaption class="small muted">Figure 7.1 — The zig-zag. E-step: build a lower bound that touches the log-likelihood at the current $\theta$. M-step: move to the bound's maximum. Since the bound is below the curve, the true log-likelihood has risen at least as much.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>E-step makes the bound tight at $\theta_t$ (Proof 6):
+$$J(\theta_t,q^{t+1})=\log p_{\theta_t}(x)$$<span class="why">$q^{t+1}=p_{\theta_t}(z\mid x)$ gives zero KL</span></li>
+<li>M-step maximises over $\theta$ with $q^{t+1}$ fixed, so it does at least as well as staying put:
+$$J(\theta_{t+1},q^{t+1})\ \ge\ J(\theta_t,q^{t+1})$$<span class="why">$\theta_{t+1}$ is an argmax (any $\theta$, in particular $\theta_t$, is no better)</span></li>
+<li>The ELBO is a lower bound for every $\theta$ and every $q$:
+$$\log p_{\theta_{t+1}}(x)\ \ge\ J(\theta_{t+1},q^{t+1})$$<span class="why">Proof 3 / Proof 4 with $\theta=\theta_{t+1}$</span></li>
+<li>Chain the three:
+$$\log p_{\theta_{t+1}}(x)\ \ge\ J(\theta_{t+1},q^{t+1})\ \ge\ J(\theta_t,q^{t+1})=\log p_{\theta_t}(x)$$<span class="why">steps 3, 2, 1</span></li>
+<li>Exact bookkeeping of the gain: $\log p_{\theta_{t+1}}(x)-\log p_{\theta_t}(x)=\big[J(\theta_{t+1},q^{t+1})-J(\theta_t,q^{t+1})\big]+D_{KL}\big(q^{t+1}\Vert p_{\theta_{t+1}}(z\mid x)\big)$, both brackets non-negative. <span class="why">Proof 4 at $\theta_{t+1}$, plus step 1</span></li>
+<li>Consequence: if the log-likelihood is bounded above, the non-decreasing sequence $\log p_{\theta_t}(x)$ converges. Fixed points are stationary points of $L$: the gap $L(\theta)-J(\theta,q^{t+1})=KL(q^{t+1}\Vert p_\theta(z\mid x))\ge0$ is zero at $\theta_t$, so it has zero gradient there and $\nabla_\theta L(\theta_t)=\nabla_\theta J(\theta_t,q^{t+1})$ (the bound is tangent to the curve in Figure 7.1). Convergence to a local, not necessarily global, optimum.</li>
+<li>For a dataset, sum steps 1-4 over $i$ (each $q_i$ is the posterior of $x_i$); monotonicity holds for the total log-likelihood.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check (3-point GMM iteration of Proof 9: $x=\{0,1,5\}$)</span>
+<p>Start $\theta_0$: $\alpha=(0.5,0.5)$, $\mu=(0,4)$, $\sigma^2=(1,1)$. E-step: $J(\theta_0,q^1)=-5.8178=\log p_{\theta_0}(X)$ (tight &#10003;). After the M-step with $q^1$ fixed: $J(\theta_1,q^1)=-4.0741$. True log-likelihood at $\theta_1$: $-3.6630$. Chain: $-5.818\le-4.074\le-3.663$ &#10003;. The extra $0.411$ above the bound equals $KL(q^1\Vert p_{\theta_1}(z\mid x))$ summed over the three points.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>The 3-inequality sandwich: tight at old $\theta$, M-step improves the bound, bound is below the true log-likelihood at new $\theta$.</li>
+<li>EM guarantees <em>monotone increase</em> and convergence to a local optimum/stationary point; not global optimality.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Claiming the M-step maximises the log-likelihood itself. It maximises the <em>bound</em> built at $\theta_t$; only the E-step makes the bound touch the likelihood. Also: the M-step only needs to <em>increase</em> $J$ for monotonicity (Generalised EM).</p></div>
+
+<!-- ============================================================ -->
+<h2 id="gmm-e" class="proof-head">8. Gaussian mixture: the E-step (responsibilities)</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>For a GMM, $P(z{=}j\mid x_i)=\gamma_{ij}=\dfrac{\alpha_j\,\mathcal N(x_i\mid\mu_j,\Sigma_j)}{\sum_{l=1}^M\alpha_l\,\mathcal N(x_i\mid\mu_l,\Sigma_l)}$, and this is the exact optimal $Q$. <em>Source: Sept 12 (GMM setup: discrete latent, mixing weights, Gaussian components); the posterior formula is step filled in. Used in clustering and as the bridge to VAEs.</em></p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 296" style="max-width:100%;height:auto" role="img" aria-label="Two weighted Gaussian components with the point x=2 and its soft assignment">
+  <line x1="60" y1="230" x2="740" y2="230" stroke="var(--text-3)"/>
+  <polyline points="60,229.1 79,228.1 98,226.3 116,223.3 135,218.7 154,211.9 172,202.8 191,191.6 210,179.2 229,166.8 248,156.1 266,148.8 285,146.2 304,148.8 322,156.1 341,166.8 360,179.2 379,191.6 398,202.8 416,211.9 435,218.7 454,223.3 472,226.3 491,228.1 510,229.1" fill="var(--accent-soft)" stroke="var(--s1)" stroke-width="2.4"/>
+  <polyline points="266,229 285,227.8 304,225.5 322,221.4 341,214.4 360,203.5 379,187.7 398,166.5 416,140.5 435,111.4 454,82.4 472,57.5 491,40.5 510,34.5 529,40.5 548,57.5 566,82.4 585,111.4 604,140.5 622,166.5 641,187.7 660,203.5 679,214.4 698,221.4 716,225.5 735,227.8" fill="none" stroke="var(--s2)" stroke-width="2.4"/>
+  <text x="285" y="138" text-anchor="middle" font-size="12.5" style="fill:var(--s1)">0.3 · N(x; 0, 1)</text>
+  <text x="560" y="30" text-anchor="middle" font-size="12.5" style="fill:var(--s2)">0.7 · N(x; 3, 1)</text>
+  <line x1="435" y1="40" x2="435" y2="230" stroke="var(--text-3)" stroke-dasharray="4 3"/>
+  <circle cx="435" cy="218.7" r="5" fill="var(--s1)"/>
+  <circle cx="435" cy="111.4" r="5" fill="var(--s2)"/>
+  <text x="446" y="214" font-size="12" style="fill:var(--s1)">0.0162</text>
+  <text x="425" y="108" text-anchor="end" font-size="12" style="fill:var(--s2)">0.1694</text>
+  <g font-size="12" text-anchor="middle"><text x="285" y="247">μ₁ = 0</text><text x="435" y="247">x = 2</text><text x="510" y="247">μ₂ = 3</text></g>
+  <text x="105" y="278" font-size="12.5">responsibilities of x = 2:</text>
+  <rect x="290" y="264" width="35" height="16" fill="var(--s1)"/><rect x="325" y="264" width="365" height="16" fill="var(--s2)"/>
+  <text x="307" y="293" text-anchor="middle" font-size="12">0.087</text><text x="510" y="293" text-anchor="middle" font-size="12">0.913</text>
+</svg>
+<figcaption class="small muted">Figure 8.1 — At $x=2$ the heights of the two weighted component densities (the joints $p(x,z{=}j)$) are $0.0162$ and $0.1694$. Normalising them gives the soft assignment $(0.087,\,0.913)$.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>The GMM as a latent variable model: $z\in\{1,\dots,M\}$ with
+$$P(z{=}j)=\alpha_j,\ \ \alpha_j\ge0,\ \ \sum_{j=1}^M\alpha_j=1,\qquad p(x\mid z{=}j)=\mathcal N(x\mid\mu_j,\Sigma_j)$$<span class="why">model definition (Sept 12)</span></li>
+<li>Joint by the chain rule:
+$$p_\theta(x,z{=}j)=\alpha_j\,\mathcal N(x\mid\mu_j,\Sigma_j)$$<span class="why">$p(z)\,p(x\mid z)$</span></li>
+<li>Marginal (the integral is a finite sum, so here the LVM is tractable):
+$$p_\theta(x)=\sum_{l=1}^M\alpha_l\,\mathcal N(x\mid\mu_l,\Sigma_l)$$<span class="why">sum rule over the discrete $z$</span></li>
+<li>The E-step optimum is the posterior (Proof 6); by Bayes' rule
+$$\gamma_{ij}\doteq q(z{=}j\mid x_i)=p_\theta(z{=}j\mid x_i)=\frac{p_\theta(x_i,z{=}j)}{p_\theta(x_i)}=\frac{\alpha_j\,\mathcal N(x_i\mid\mu_j,\Sigma_j)}{\sum_{l}\alpha_l\,\mathcal N(x_i\mid\mu_l,\Sigma_l)}$$<span class="why">Bayes' rule; steps 2 and 3</span></li>
+<li>The $\gamma_{ij}$ are non-negative and sum to one over components for each point:
+$$\sum_{j=1}^M\gamma_{ij}=1$$<span class="why">normalisation by the denominator</span></li>
+<li>With the $D$-dimensional Gaussian
+$$\mathcal N(x\mid\mu,\Sigma)=\frac{1}{(2\pi)^{D/2}|\Sigma|^{1/2}}\exp\!\Big(-\tfrac12(x-\mu)^\top\Sigma^{-1}(x-\mu)\Big)$$<span class="why">definition; keep $|\Sigma_j|$ in the ratio, it differs per component</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Mixture of Proof 3 at $x=2$: $\gamma_1=\frac{0.3\cdot0.05399}{0.3\cdot0.05399+0.7\cdot0.24197}=\frac{0.016197}{0.185577}=0.0873$, $\gamma_2=0.9127$ (sum $=1$ &#10003;).</p>
+<p>Three-point dataset $x=\{0,1,5\}$ with $\alpha=(\tfrac12,\tfrac12)$, $\mu=(0,4)$, $\sigma^2=(1,1)$ (used in Proof 9):</p>
+<div class="table-wrap"><table>
+<tr><th>$x_i$</th><th>$\alpha_1\mathcal N_1$</th><th>$\alpha_2\mathcal N_2$</th><th>$\gamma_{i1}$</th><th>$\gamma_{i2}$</th></tr>
+<tr><td>0</td><td>0.19947</td><td>0.0000669</td><td>0.99966</td><td>0.00034</td></tr>
+<tr><td>1</td><td>0.12099</td><td>0.0022159</td><td>0.98201</td><td>0.01799</td></tr>
+<tr><td>5</td><td>0.00000074</td><td>0.12099</td><td>0.000006</td><td>0.999994</td></tr>
+</table></div></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Responsibility = posterior probability that component $j$ generated $x_i$; a soft cluster assignment. In GMM the E-step is exact because $z$ is discrete and the sum is finite.</li>
+<li>The GMM is "one of the early and classical latent variable models"; the latent variable picks the Gaussian that generated the point, $\alpha_j$ are the cluster priors.</li>
+<li>Learned: $\{\alpha_j,\mu_j,\Sigma_j\}_{j=1}^M$.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Forgetting the weight $\alpha_j$ (using only the likelihood $\mathcal N$): a component with a high density but tiny prior would be over-credited. Normalise over $j$ (components), not over $i$ (data points).</p></div>
+
+<!-- ============================================================ -->
+<h2 id="gmm-m" class="proof-head">9. Gaussian mixture: the M-step (means, covariances, weights)</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>With $N_j=\sum_i\gamma_{ij}$: $\ \mu_j=\frac1{N_j}\sum_i\gamma_{ij}x_i,\ \ \Sigma_j=\frac1{N_j}\sum_i\gamma_{ij}(x_i-\mu_j)(x_i-\mu_j)^\top,\ \ \alpha_j=\frac{N_j}{N}$. <em>Source: Sept 12 only sets up the parameters $\{\alpha,\mu,\Sigma\}$; the maximisation is step filled in. This is the classical result the professor pointed to (NPTEL classical ML) and the template for every M-step.</em></p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 270" style="max-width:100%;height:auto" role="img" aria-label="One EM iteration on three points: old means move to responsibility-weighted new means">
+  <defs>
+    <marker id="p03a9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker>
+  </defs>
+  <text x="380" y="20" text-anchor="middle" font-size="14" font-weight="700">One EM iteration on x = 0, 1, 5 (1-D, two clusters)</text>
+  <line x1="60" y1="150" x2="720" y2="150" stroke="var(--text-3)"/>
+  <g font-size="12" text-anchor="middle" class="muted-t">
+    <text x="80" y="168">0</text><text x="200" y="168">1</text><text x="320" y="168">2</text><text x="440" y="168">3</text><text x="560" y="168">4</text><text x="680" y="168">5</text>
+  </g>
+  <!-- responsibility bars above points -->
+  <rect x="60" y="62" width="40" height="14" fill="var(--s1)"/><rect x="100" y="62" width="0.01" height="14" fill="var(--s2)"/>
+  <rect x="180" y="62" width="39.3" height="14" fill="var(--s1)"/><rect x="219.3" y="62" width="0.7" height="14" fill="var(--s2)"/>
+  <rect x="660" y="62" width="0.01" height="14" fill="var(--s1)"/><rect x="660" y="62" width="40" height="14" fill="var(--s2)"/>
+  <text x="80" y="54" text-anchor="middle" font-size="11.5">γ = (1.00, 0.00)</text>
+  <text x="200" y="54" text-anchor="middle" font-size="11.5">(0.98, 0.02)</text>
+  <text x="680" y="54" text-anchor="middle" font-size="11.5">(0.00, 1.00)</text>
+  <circle cx="80" cy="110" r="7" fill="var(--text-3)"/><circle cx="200" cy="110" r="7" fill="var(--text-3)"/><circle cx="680" cy="110" r="7" fill="var(--text-3)"/>
+  <text x="380" y="136" text-anchor="middle" font-size="12" class="muted-t">data points (grey); bar above = soft assignment (blue = cluster 1, orange = cluster 2)</text>
+  <!-- old means -->
+  <polygon points="80,200 72,214 88,214" fill="none" stroke="var(--s1)" stroke-width="2"/>
+  <polygon points="560,200 552,214 568,214" fill="none" stroke="var(--s2)" stroke-width="2"/>
+  <text x="80" y="230" text-anchor="middle" font-size="12">old μ₁ = 0</text>
+  <text x="560" y="230" text-anchor="middle" font-size="12">old μ₂ = 4</text>
+  <!-- new means -->
+  <polygon points="139.5,200 131.5,214 147.5,214" fill="var(--s1)"/>
+  <polygon points="671.3,200 663.3,214 679.3,214" fill="var(--s2)"/>
+  <text x="140" y="246" text-anchor="middle" font-size="12" font-weight="700">new μ₁ = 0.496</text>
+  <text x="672" y="246" text-anchor="middle" font-size="12" font-weight="700">new μ₂ = 4.928</text>
+  <line x1="92" y1="207" x2="128" y2="207" stroke="var(--text-3)" stroke-width="1.8" marker-end="url(#p03a9)"/>
+  <line x1="572" y1="207" x2="656" y2="207" stroke="var(--text-3)" stroke-width="1.8" marker-end="url(#p03a9)"/>
+  <text x="380" y="262" text-anchor="middle" font-size="12" class="muted-t">new mean = responsibility-weighted average of the data; weights α = (0.66, 0.34); log-likelihood −5.818 → −3.663</text>
+</svg>
+<figcaption class="small muted">Figure 9.1 — The M-step moves each mean to the weighted centre of the points it is responsible for: $\mu_2$ jumps from 4 to 4.93 (towards $x=5$), $\mu_1$ settles between the two points it owns.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>For the dataset $x_1,\dots,x_N$, with $q_i(z{=}j)=\gamma_{ij}$ from the E-step, the ELBO is
+$$J=\sum_{i=1}^N\sum_{j=1}^M\gamma_{ij}\,\log\frac{\alpha_j\,\mathcal N(x_i\mid\mu_j,\Sigma_j)}{\gamma_{ij}}$$<span class="why">ELBO per point, $z$ discrete so $\mathbb E_q$ is a finite sum</span></li>
+<li>Only the part containing $\theta$ matters (the $-\gamma\log\gamma$ part is the entropy $H(q)$, independent of $\theta$):
+$$\mathcal Q(\theta)=\sum_{i}\sum_{j}\gamma_{ij}\Big[\log\alpha_j+\log\mathcal N(x_i\mid\mu_j,\Sigma_j)\Big]$$<span class="why">M-step objective, Proof 6</span></li>
+<li>Expand the Gaussian log-density:
+$$\log\mathcal N(x\mid\mu,\Sigma)=-\tfrac D2\log2\pi-\tfrac12\log|\Sigma|-\tfrac12(x-\mu)^\top\Sigma^{-1}(x-\mu)$$<span class="why">take $\log$ of the density</span></li>
+<li><strong>Means.</strong> Differentiate $\mathcal Q$ in $\mu_j$ (only component $j$'s terms depend on it):
+$$\frac{\partial\mathcal Q}{\partial\mu_j}=\sum_i\gamma_{ij}\,\Sigma_j^{-1}(x_i-\mu_j)=0$$<span class="why">$\nabla_\mu\big[-\tfrac12(x-\mu)^\top\Sigma^{-1}(x-\mu)\big]=\Sigma^{-1}(x-\mu)$</span></li>
+<li>Multiply by $\Sigma_j$ and solve:
+$$\mu_j=\frac{\sum_i\gamma_{ij}\,x_i}{\sum_i\gamma_{ij}}=\frac1{N_j}\sum_i\gamma_{ij}\,x_i,\qquad N_j\doteq\sum_i\gamma_{ij}$$<span class="why">$\Sigma_j$ invertible; $\mathcal Q$ is concave in $\mu_j$, so this stationary point is the maximum</span></li>
+<li><strong>Covariances.</strong> Write $\Lambda_j=\Sigma_j^{-1}$ so $\log|\Sigma_j|=-\log|\Lambda_j|$. The part of $\mathcal Q$ that depends on $\Lambda_j$ is
+$$\sum_i\gamma_{ij}\Big[\tfrac12\log|\Lambda_j|-\tfrac12(x_i-\mu_j)^\top\Lambda_j(x_i-\mu_j)\Big]$$<span class="why">step 3 with $\Sigma^{-1}=\Lambda$</span></li>
+<li>Differentiate in $\Lambda_j$ using $\frac{\partial\log|\Lambda|}{\partial\Lambda}=\Lambda^{-1}=\Sigma$ and $\frac{\partial}{\partial\Lambda}\,a^\top\Lambda a=aa^\top$:
+$$\tfrac12N_j\,\Sigma_j-\tfrac12\sum_i\gamma_{ij}(x_i-\mu_j)(x_i-\mu_j)^\top=0$$<span class="why">matrix calculus (symmetric $\Lambda$)</span></li>
+<li>Solve for $\Sigma_j$ (with the new $\mu_j$ of step 5):
+$$\Sigma_j=\frac1{N_j}\sum_i\gamma_{ij}\,(x_i-\mu_j)(x_i-\mu_j)^\top$$<span class="why">divide by $N_j/2$</span></li>
+<li><strong>Weights.</strong> The $\alpha$-part is $\sum_jN_j\log\alpha_j$ subject to $\sum_j\alpha_j=1$. Lagrangian:
+$$\mathcal F=\sum_jN_j\log\alpha_j+\lambda\Big(1-\sum_j\alpha_j\Big)$$<span class="why">constrained optimisation, $\alpha$ is a probability vector</span></li>
+<li>Set $\partial\mathcal F/\partial\alpha_j=N_j/\alpha_j-\lambda=0$, so $\alpha_j=N_j/\lambda$.</li>
+<li>Impose the constraint: $\sum_j\alpha_j=\frac1\lambda\sum_jN_j=1$. And $\sum_jN_j=\sum_i\sum_j\gamma_{ij}=\sum_i1=N$, so $\lambda=N$:
+$$\alpha_j=\frac{N_j}{N}$$<span class="why">$\gamma_{i\cdot}$ sums to 1 (Proof 8 step 5); $\log$ is concave so this is the maximum</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check: full iteration (data $x=\{0,1,5\}$, $\theta_0$: $\alpha=(\tfrac12,\tfrac12)$, $\mu=(0,4)$, $\sigma^2=(1,1)$)</span>
+<p>Responsibilities from the table of Proof 8. Effective counts: $N_1=0.99966+0.98201+0.000006=1.98168$, $N_2=0.00034+0.01799+0.999994=1.01832$ (sum $=3=N$ &#10003;).</p>
+<p>Means: $\mu_1=\frac{0.98201\cdot1+0.000006\cdot5}{1.98168}=0.4956$; $\mu_2=\frac{0.01799\cdot1+0.999994\cdot5}{1.01832}=4.9277$.</p>
+<p>Variances (1-D): $\sigma_1^2=\frac{0.99966(0.4956)^2+0.98201(0.5044)^2+0.000006(4.50)^2}{1.98168}=0.2500$; $\sigma_2^2=\frac{0.00034(4.93)^2+0.01799(3.93)^2+0.999994(0.0723)^2}{1.01832}=0.2856$.</p>
+<p>Weights: $\alpha=(1.98168/3,\ 1.01832/3)=(0.6606,\ 0.3394)$.</p>
+<p>Log-likelihood: before $=-5.8178$, after $=-3.6630$: it increased, as Proof 7 guarantees. The learned model now describes the data as a tight cluster near $0.5$ (two points, weight $\approx2/3$) and one near $4.9$ (one point, weight $\approx1/3$).</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>GMM M-step = weighted maximum-likelihood for a Gaussian: weights are the responsibilities. $N_j$ is the "effective number of points" in cluster $j$.</li>
+<li>Alternate: E-step computes $\gamma_{ij}$ (posterior), M-step re-estimates $\alpha_j,\mu_j,\Sigma_j$; repeat to convergence. Hard assignments ($\gamma\in\{0,1\}$) would give K-means.</li>
+<li>GMM learns $\alpha,\mu,\Sigma$ exactly because the posterior is tractable; its limitation (many parameters, rigid cluster shapes, fixed discrete latent) motivates VAEs with continuous $z$ and an approximate $Q$.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Using the <em>old</em> means inside the covariance update; the update uses the freshly computed $\mu_j$. Also: EM for GMM can collapse a component onto one point ($\sigma^2\to0$, likelihood $\to\infty$) and finds only a local optimum, so initialisation matters.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="summary">Summary of the proofs on this page</h2>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Statement</th><th>Key trick</th></tr>
+<tr><td>1</td><td>$\arg\min D_{KL}(P_X\Vert P_\theta)=\arg\max\mathbb E_{P_X}\log P_\theta$ (MLE)</td><td>Split $\log\frac ab$; the data-entropy term has no $\theta$</td></tr>
+<tr><td>2</td><td>$\log\int p_\theta(x,z)dz$ and its gradient are intractable</td><td>log of an integral does not split; $\nabla\log p=\mathbb E_{p(z|x)}[\nabla\log p(x,z)]$ is circular</td></tr>
+<tr><td>3</td><td>$\log p_\theta(x)\ge\mathbb E_q\big[\log\frac{p_\theta(x,z)}{q}\big]$ (ELBO)</td><td>Multiply and divide by $q$, then Jensen ($\log$ concave)</td></tr>
+<tr><td>4</td><td>$\log p_\theta(x)=\text{ELBO}+KL(q\Vert p_\theta(z|x))$</td><td>Bayes: $p(x,z)=p(z|x)p(x)$; $\log p(x)$ is constant under $\mathbb E_q$</td></tr>
+<tr><td>5</td><td>ELBO = reconstruction − KL(q‖prior) = $\mathbb E_q\log p(x,z)+H(q)$</td><td>Split the log at the prior, or at numerator vs denominator</td></tr>
+<tr><td>6</td><td>E-step: $q=p_\theta(z|x)$; M-step: $\max_\theta\mathbb E_q\log p_\theta(x,z)$</td><td>Constants drop out of the argmax (gap form; entropy form)</td></tr>
+<tr><td>7</td><td>EM never decreases $\log p_\theta(x)$</td><td>Tight at old $\theta$, M-step improves bound, bound is below the curve</td></tr>
+<tr><td>8</td><td>GMM responsibilities $\gamma_{ij}=\alpha_j\mathcal N_j/\sum_l\alpha_l\mathcal N_l$</td><td>E-step optimum = Bayes' posterior</td></tr>
+<tr><td>9</td><td>GMM M-step: weighted mean, weighted covariance, $\alpha_j=N_j/N$</td><td>Set derivatives of $\mathcal Q$ to zero; Lagrange multiplier for $\sum\alpha=1$</td></tr>
+</table></div>
+
+</main>
+</body>
+</html>

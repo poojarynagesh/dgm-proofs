@@ -1,0 +1,1064 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attention and the Transformer — DGM Lecture Proofs</title>
+<link rel="stylesheet" href="assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="assets/style.css">
+<script defer src="assets/vendor/katex/katex.min.js"></script>
+<script defer src="assets/vendor/katex/auto-render.min.js"></script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/site.js"></script>
+</head>
+<body data-page="p07" data-root=".">
+<main class="content">
+
+<div class="hero">
+  <div class="kicker">Lecture proofs · Oct 17 and Oct 24 classes</div>
+  <h1>Attention and the Transformer</h1>
+  <p class="lead">Every derivation behind the autoregressive Transformer, step by step: the chain-rule factorisation, why recurrence loses gradient, attention as a soft lookup, the $1/\sqrt{d_k}$ scaling, the causal mask, multi-head bookkeeping, residuals, layer norm, positional encoding, the cross-entropy / teacher-forcing loss and decoding. Each result has a picture, numbered steps with the reason for each line, and a worked numeric check.</p>
+</div>
+
+<div class="box key"><span class="box-title">How to read this page</span>
+<p>Sources: Oct 17 notes (sections 9 to 13: autoregressive models, RNNs, attention, causal mask) and Oct 24 notes (sections 1 to 10: Transformer block, training, decoding). Where the professor only <em>stated</em> a fact, the page says so; where a step was not written out in class but is needed for a complete proof it is marked <strong>(step filled in — not written out in class)</strong>. Notation: a sequence is $x=(x_1,\ldots,x_T)$, $x_{&lt;t}=(x_1,\ldots,x_{t-1})$, $d_M$ is the model width, $d_k,d_v$ the key and value widths, $H$ the number of heads.</p></div>
+
+<div class="box"><span class="box-title">Roadmap</span>
+<ol class="small">
+<li><a href="#chain">The autoregressive (chain-rule) factorisation is exact</a></li>
+<li><a href="#rnn">Why recurrence loses long-range gradient and attention does not</a></li>
+<li><a href="#softlookup">Attention is a soft lookup: a convex combination of values</a></li>
+<li><a href="#scale">Why divide by the square root of the key dimension</a></li>
+<li><a href="#causal">The causal mask enforces the autoregressive conditional</a></li>
+<li><a href="#shapes">Shape bookkeeping and the quadratic cost</a></li>
+<li><a href="#multihead">Multi-head attention: dimension split and parameter count</a></li>
+<li><a href="#ffn">Why attention needs a position-wise feed-forward layer</a></li>
+<li><a href="#residual">Residual connections and the identity gradient path</a></li>
+<li><a href="#layernorm">Layer normalisation</a></li>
+<li><a href="#posenc">Positional encoding: why it is needed and the shift property</a></li>
+<li><a href="#tf">Maximum likelihood = sum of cross-entropies (teacher forcing)</a></li>
+<li><a href="#decode">Inference: sequential decoding and temperature</a></li>
+<li><a href="#summary">Summary table</a></li>
+</ol></div>
+
+<!-- ============================================================ -->
+<h2 id="chain" class="proof-head">1. The autoregressive (chain-rule) factorisation is exact</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>For <em>any</em> joint distribution over a sequence, $p(x_1,\ldots,x_T)=\prod_{t=1}^{T}p(x_t\mid x_{&lt;t})$ — no independence assumption is made, so modelling each conditional loses nothing; and sampling the conditionals left to right produces exact samples of the joint. (Oct 17 notes §9.3–9.4, recapped Oct 24 §2.1.) Used later in: the teacher-forcing loss (proof 12), decoding (proof 13), and the policy-gradient view of LLMs.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 250" style="max-width:100%;height:auto" role="img" aria-label="Chain of conditionals: each token depends on all earlier tokens">
+  <defs>
+    <marker id="p07a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker>
+    <marker id="p07a1b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s3)"/></marker>
+  </defs>
+  <path d="M90,108 Q250,40 408,108" fill="none" stroke="var(--s3)" stroke-width="1.6" marker-end="url(#p07a1b)"/>
+  <path d="M250,108 Q410,40 568,108" fill="none" stroke="var(--s3)" stroke-width="1.6" marker-end="url(#p07a1b)"/>
+  <path d="M90,108 Q330,-12 568,108" fill="none" stroke="var(--s3)" stroke-width="1.6" marker-end="url(#p07a1b)"/>
+  <g font-size="14" text-anchor="middle">
+    <circle cx="90" cy="130" r="22" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="90" y="135">x₁</text>
+    <circle cx="250" cy="130" r="22" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="250" y="135">x₂</text>
+    <circle cx="410" cy="130" r="22" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="410" y="135">x₃</text>
+    <circle cx="570" cy="130" r="22" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="570" y="135">x₄</text>
+    <text x="680" y="135" font-size="16">… x_T</text>
+  </g>
+  <line x1="112" y1="130" x2="226" y2="130" stroke="var(--text-3)" stroke-width="1.6" marker-end="url(#p07a1)"/>
+  <line x1="272" y1="130" x2="386" y2="130" stroke="var(--text-3)" stroke-width="1.6" marker-end="url(#p07a1)"/>
+  <line x1="432" y1="130" x2="546" y2="130" stroke="var(--text-3)" stroke-width="1.6" marker-end="url(#p07a1)"/>
+  <g font-size="12.5" text-anchor="middle">
+    <text x="90" y="176">p(x₁)</text>
+    <text x="250" y="176">p(x₂ | x₁)</text>
+    <text x="410" y="176">p(x₃ | x₁, x₂)</text>
+    <text x="570" y="176">p(x₄ | x₁, x₂, x₃)</text>
+  </g>
+  <text x="380" y="214" text-anchor="middle" font-size="13.5" font-weight="700">p(x₁,x₂,x₃,x₄) = p(x₁) · p(x₂|x₁) · p(x₃|x₁,x₂) · p(x₄|x₁,x₂,x₃)</text>
+  <text x="380" y="238" text-anchor="middle" font-size="12" class="muted-t">every arrow = "this token is in the context of that factor"; sampling walks the chain left to right</text>
+</svg>
+<figcaption class="small muted">Figure 1.1 — The factorisation conditions each token on <em>all</em> earlier tokens (green arcs show the long-range dependencies). Nothing is assumed independent.</figcaption>
+</figure>
+
+<h3>Proof of the factorisation</h3>
+<ol class="steps">
+<li><span class="why">definition of conditional probability</span> For events $A,B$ with $p(B)&gt;0$: $$p(A\mid B)=\frac{p(A,B)}{p(B)}\quad\Longrightarrow\quad p(A,B)=p(B)\,p(A\mid B).$$</li>
+<li><span class="why">apply with $A=x_t$, $B=x_{&lt;t}$</span> For every $t\ge 2$: $$p(x_1,\ldots,x_t)=p(x_{&lt;t})\;p(x_t\mid x_{&lt;t}).$$ For $t=1$ the context is empty, so $p(x_1)=p(x_1\mid x_{&lt;1})$.</li>
+<li><span class="why">induction on $T$</span> Base: $p(x_1)=p(x_1\mid x_{&lt;1})$. Step: assume $p(x_{&lt;T})=\prod_{t=1}^{T-1}p(x_t\mid x_{&lt;t})$; insert into step 2 with $t=T$: $$p(x_1,\ldots,x_T)=\Big[\prod_{t=1}^{T-1}p(x_t\mid x_{&lt;t})\Big]\,p(x_T\mid x_{&lt;T})=\prod_{t=1}^{T}p(x_t\mid x_{&lt;t}).$$</li>
+<li><span class="why">log is monotone, log of product = sum of logs</span> $$\log p_\theta(x_1,\ldots,x_T)=\sum_{t=1}^{T}\log p_\theta(x_t\mid x_{&lt;t}).$$ This is the quantity maximised in training (proof 12).</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<h3>Any choice of conditionals defines a valid joint, and sampling is exact <span class="why">step filled in — not written out in class</span></h3>
+<ol class="steps">
+<li><span class="why">sum out the last token first</span> If each $p_\theta(x_t\mid x_{&lt;t})$ is a normalised distribution over the vocabulary, then $$\sum_{x_T}\prod_{t=1}^{T}p_\theta(x_t\mid x_{&lt;t})=\Big[\prod_{t=1}^{T-1}p_\theta(x_t\mid x_{&lt;t})\Big]\underbrace{\sum_{x_T}p_\theta(x_T\mid x_{&lt;T})}_{=1}.$$</li>
+<li><span class="why">repeat for $x_{T-1},\ldots,x_1$</span> The sum over all sequences equals $1$, so the product is a proper joint distribution for any normalised conditionals — the network only has to output a softmax at each position.</li>
+<li><span class="why">ancestral sampling</span> Sample $x_1\sim p_\theta(x_1)$, then $x_2\sim p_\theta(x_2\mid x_1)$, ..., $x_T\sim p_\theta(x_T\mid x_{&lt;T})$. The probability of producing the particular sequence $(x_1,\ldots,x_T)$ is the product of the probabilities of each draw, i.e. exactly $\prod_t p_\theta(x_t\mid x_{&lt;t})=p_\theta(x_1,\ldots,x_T)$.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Two binary tokens with joint $p(0,0)=0.3,\ p(0,1)=0.1,\ p(1,0)=0.2,\ p(1,1)=0.4$. Marginal $p(x_1=0)=0.3+0.1=0.4$. Conditional $p(x_2=1\mid x_1=0)=0.1/0.4=0.25$. Product: $0.4\times0.25=0.1=p(0,1)$ as required. Likewise $p(x_1=1)=0.6$, $p(x_2=1\mid x_1=1)=0.4/0.6=2/3$, and $0.6\cdot\tfrac23=0.4=p(1,1)$. Normalisation: $0.4(0.75+0.25)+0.6(\tfrac13+\tfrac23)=1$.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>$x_1,\ldots,x_T$ are <strong>positions within one sequence</strong>, not different data examples (the professor stressed the change of notation). A sequence is a $T\times D$ matrix.</li>
+<li>The first factor is $p(x_1)$ — empty context. The factorisation is exact (chain rule), not an approximation; the <em>modelling</em> choice is how to parameterise each conditional (linear / MLP / RNN / attention).</li>
+<li>Log turns the product into a sum, which is what makes maximum-likelihood training a sum of per-token losses.</li>
+<li>History (Oct 17): linear prediction coding $x_t\approx\sum_j a_jx_{t-j}+\epsilon_t$ (speech/telephony), Bengio-style neural LMs (MLP on past tokens; naive version ignores order), RNNs $h_t=f_\theta(h_{t-1},x_{t-1})$, $y_t=g_\phi(h_t)$ with parameters shared across time.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Saying the factorisation "assumes" the Markov property or conditional independence. It does not; $p(x_t\mid x_{&lt;t})$ conditions on the <em>whole</em> past. Markov would be $p(x_t\mid x_{t-1})$, a special (restricted) model.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="rnn" class="proof-head">2. Why recurrence loses long-range gradient and attention does not</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>In an RNN the gradient from step $T$ to step $1$ is a product of $T-1$ Jacobians, which is bounded by $c^{T-1}$ and vanishes if each factor has norm at most $c&lt;1$. With attention the context vector is a direct weighted sum, so the path from any source position to the output has length $1$. (Oct 17 notes §10.4, §11.2–11.3.) Used later in: the motivation for the Transformer, which drops recurrence.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 330" style="max-width:100%;height:auto" role="img" aria-label="Gradient shrinks through a chain of recurrent states while attention connects position T directly to position 1">
+  <defs>
+    <marker id="p07b1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker>
+    <marker id="p07b2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s2)"/></marker>
+    <marker id="p07b3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s3)"/></marker>
+  </defs>
+  <text x="380" y="20" text-anchor="middle" font-size="14" font-weight="700">RNN: gradient passes through every state (each Jacobian has norm at most c = 0.8)</text>
+  <g font-size="13" text-anchor="middle">
+    <circle cx="80" cy="76" r="20" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="80" y="81">h₁</text>
+    <circle cx="220" cy="76" r="20" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="220" y="81">h₂</text>
+    <circle cx="360" cy="76" r="20" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="360" y="81">h₃</text>
+    <circle cx="500" cy="76" r="20" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="500" y="81">h₄</text>
+    <circle cx="640" cy="76" r="20" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="640" y="81">h₅</text>
+  </g>
+  <g stroke="var(--text-3)" stroke-width="1.6">
+    <line x1="102" y1="76" x2="196" y2="76" marker-end="url(#p07b1)"/><line x1="242" y1="76" x2="336" y2="76" marker-end="url(#p07b1)"/>
+    <line x1="382" y1="76" x2="476" y2="76" marker-end="url(#p07b1)"/><line x1="522" y1="76" x2="616" y2="76" marker-end="url(#p07b1)"/>
+  </g>
+  <g font-size="11.5" text-anchor="middle" class="muted-t">
+    <text x="150" y="68">f_θ</text><text x="290" y="68">f_θ</text><text x="430" y="68">f_θ</text><text x="570" y="68">f_θ</text>
+  </g>
+  <g fill="var(--s2)">
+    <rect x="70" y="148" width="20" height="16.4"/><rect x="210" y="143.9" width="20" height="20.5"/>
+    <rect x="350" y="138.8" width="20" height="25.6"/><rect x="490" y="132.4" width="20" height="32"/><rect x="630" y="124.4" width="20" height="40"/>
+  </g>
+  <line x1="40" y1="164.4" x2="700" y2="164.4" stroke="var(--text-3)"/>
+  <g font-size="12" text-anchor="middle">
+    <text x="80" y="182">0.8⁴ = 0.41</text><text x="220" y="182">0.8³ = 0.51</text><text x="360" y="182">0.8² = 0.64</text><text x="500" y="182">0.8</text><text x="640" y="182">1</text>
+  </g>
+  <text x="380" y="114" text-anchor="middle" font-size="12.5" style="fill:var(--s2)">gradient size flowing backwards from the loss at h₅ (bars)</text>
+  <text x="380" y="200" text-anchor="middle" font-size="12" class="muted-t">after 49 steps the factor is 0.8⁴⁹ = 1.8e-5, after 99 steps 2.5e-10</text>
+
+  <text x="380" y="236" text-anchor="middle" font-size="14" font-weight="700">Attention: z_T is a weighted sum of all values, so every source is one step away</text>
+  <g font-size="13" text-anchor="middle">
+    <circle cx="80" cy="290" r="18" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="80" y="295">x₁</text>
+    <circle cx="220" cy="290" r="18" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="220" y="295">x₂</text>
+    <circle cx="360" cy="290" r="18" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="360" y="295">x₃</text>
+    <circle cx="500" cy="290" r="18" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="500" y="295">x₄</text>
+    <circle cx="640" cy="290" r="18" fill="var(--surface-2)" stroke="var(--s3)" stroke-width="2"/><text x="640" y="295">z_T</text>
+  </g>
+  <path d="M96,278 Q360,236 624,278" fill="none" stroke="var(--s3)" stroke-width="1.8" marker-end="url(#p07b3)"/>
+  <path d="M236,278 Q430,252 624,280" fill="none" stroke="var(--s3)" stroke-width="1.4" marker-end="url(#p07b3)"/>
+  <text x="380" y="322" text-anchor="middle" font-size="12" class="muted-t">∂z_T/∂v₁ = α_T1 · I : one factor, no product of T−1 Jacobians</text>
+</svg>
+<figcaption class="small muted">Figure 2.1 — Top: backpropagation through time multiplies one Jacobian per step, so the learning signal to early positions decays geometrically. Bottom: attention connects the output directly to every position.</figcaption>
+</figure>
+
+<h3>The vanishing-gradient bound</h3>
+<ol class="steps">
+<li><span class="why">recurrence</span> $h_t=f_\theta(h_{t-1},x_{t-1})$ with the <em>same</em> $\theta$ at every step (parameter sharing across time). Write the one-step Jacobian $J_t=\dfrac{\partial h_t}{\partial h_{t-1}}$.</li>
+<li><span class="why">chain rule through the time steps</span> $$\frac{\partial h_T}{\partial h_1}=\frac{\partial h_T}{\partial h_{T-1}}\cdots\frac{\partial h_2}{\partial h_1}=\prod_{t=2}^{T}J_t.$$</li>
+<li><span class="why">operator norm is submultiplicative: $\|AB\|\le\|A\|\|B\|$</span> $$\Big\|\frac{\partial h_T}{\partial h_1}\Big\|\le\prod_{t=2}^{T}\|J_t\|.$$</li>
+<li><span class="why">assume $\|J_t\|\le c&lt;1$ (the lecture: "magnitudes below one in relevant directions")</span> $$\Big\|\frac{\partial h_T}{\partial h_1}\Big\|\le c^{\,T-1}\xrightarrow[T\to\infty]{}0.$$ Any loss term at step $T$ therefore sends an exponentially weak signal to the early inputs: long contexts cannot be learned.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<h3>Attention removes the bottleneck and the long path</h3>
+<ol class="steps">
+<li><span class="why">encoder-decoder with a single state</span> A basic RNN encoder-decoder passes only $h_T$ to the decoder, so $h_T$ must summarise the whole input (bottleneck).</li>
+<li><span class="why">keep all encoder states</span> Form a context vector for decoder step $t$: $$c_t=\sum_{j=1}^{T}\alpha_{t,j}\,h_j,\qquad\alpha_{t,j}\ge0,\ \ \sum_j\alpha_{t,j}=1.$$</li>
+<li><span class="why">differentiate</span> $\dfrac{\partial c_t}{\partial h_j}=\alpha_{t,j}I$ — a single scalar-times-identity factor, independent of how far apart $t$ and $j$ are. (Self-attention in the Transformer uses the same idea with $z_i=\sum_j\alpha_{ij}v_j$, proof 3.)</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>With $c=0.8$: $0.8^{49}=1.78\times10^{-5}$ for a 50-token context and $0.8^{99}=2.5\times10^{-10}$ for 100 tokens. For a context of a million tokens the bound is $0.8^{10^6}$, numerically zero. With attention the gradient factor from any position to the output is $\alpha_{ij}$ itself, for example $0.665$ in the example of proof 3, whatever the distance.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>The Transformer paper did <strong>not</strong> invent attention; attention already existed on top of RNN encoder-decoders (translation). Its change was <strong>removing recurrence</strong> and using attention plus feed-forward layers ("Attention Is All You Need").</li>
+<li>Mechanism of vanishing gradients: repeated Jacobian products with norm below one; bottleneck: one final state $h_T$ for the whole sentence.</li>
+<li>RNN/GRU/LSTM share the same state-update foundation; parameters are shared across time so any length works.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>The bound $c^{T-1}$ is a <em>sufficient</em> condition for vanishing, not a theorem that every RNN vanishes: if the Jacobians have norm above one the product can instead explode. The lecture phrased it as "below one in relevant directions".</p></div>
+
+<!-- ============================================================ -->
+<h2 id="softlookup" class="proof-head">3. Attention is a soft lookup: a convex combination of values</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>Replace a hard dictionary lookup (return the value of the best-matching key) by a differentiable one: scores $s_{ij}=q_i^\top k_j$, softmax weights $\alpha_{ij}$, output $z_i=\sum_j\alpha_{ij}v_j$. The weights are positive and sum to $1$, hence $z_i$ lies in the convex hull of the values, and in matrix form $Z=\operatorname{softmax}(QK^\top/\sqrt{d_k})V$. (Oct 17 notes §12.2–12.6; Oct 24 §2.2.) Used later in: causal attention (proof 5), multi-head attention (proof 7).</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 320" style="max-width:100%;height:auto" role="img" aria-label="Query compared with three keys, scores turned into softmax weights, weighted sum of values">
+  <defs>
+    <marker id="p07c1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker>
+  </defs>
+  <g font-size="12.5" font-weight="700" text-anchor="middle" class="muted-t">
+    <text x="60" y="20">query</text><text x="165" y="20">keys</text><text x="262" y="20">score s</text><text x="392" y="20">softmax weight α</text><text x="525" y="20">values</text><text x="690" y="20">output</text>
+  </g>
+  <rect x="20" y="130" width="80" height="50" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="60" y="160" font-size="14" text-anchor="middle">q_i</text>
+  <g font-size="14" text-anchor="middle">
+    <rect x="130" y="50" width="70" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s2)"/><text x="165" y="77">k₁</text>
+    <rect x="130" y="138" width="70" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s2)"/><text x="165" y="165">k₂</text>
+    <rect x="130" y="226" width="70" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s2)"/><text x="165" y="253">k₃</text>
+  </g>
+  <g stroke="var(--text-3)" stroke-width="1.5">
+    <line x1="100" y1="150" x2="128" y2="76" marker-end="url(#p07c1)"/><line x1="100" y1="155" x2="128" y2="160" marker-end="url(#p07c1)"/><line x1="100" y1="162" x2="128" y2="246" marker-end="url(#p07c1)"/>
+  </g>
+  <g font-size="13" text-anchor="middle">
+    <text x="262" y="78">q·k₁ = 2</text><text x="262" y="166">q·k₂ = 1</text><text x="262" y="254">q·k₃ = 0</text>
+  </g>
+  <g fill="var(--s1)">
+    <rect x="330" y="60" width="110" height="26" rx="3"/><rect x="330" y="148" width="41" height="26" rx="3"/><rect x="330" y="236" width="15" height="26" rx="3"/>
+  </g>
+  <g font-size="13" font-weight="700">
+    <text x="446" y="78">0.665</text><text x="377" y="166">0.245</text><text x="351" y="254">0.090</text>
+  </g>
+  <text x="392" y="296" text-anchor="middle" font-size="12" class="muted-t">0.665 + 0.245 + 0.090 = 1</text>
+  <g font-size="14" text-anchor="middle">
+    <rect x="490" y="50" width="70" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="525" y="77">v₁</text>
+    <rect x="490" y="138" width="70" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="525" y="165">v₂</text>
+    <rect x="490" y="226" width="70" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="525" y="253">v₃</text>
+  </g>
+  <g stroke="var(--s3)" stroke-width="1.8">
+    <line x1="560" y1="72" x2="650" y2="150" marker-end="url(#p07c1)"/><line x1="560" y1="160" x2="650" y2="160" marker-end="url(#p07c1)"/><line x1="560" y1="248" x2="650" y2="170" marker-end="url(#p07c1)"/>
+  </g>
+  <rect x="652" y="130" width="76" height="60" rx="8" fill="var(--accent-soft)" stroke="var(--s1)" stroke-width="2"/>
+  <text x="690" y="156" font-size="14" text-anchor="middle">z_i</text><text x="690" y="176" font-size="11" text-anchor="middle" class="muted-t">Σ α_j v_j</text>
+</svg>
+<figcaption class="small muted">Figure 3.1 — One query is compared with every key (scores, here the lecture's illustrative values after scaling: 2, 1, 0). Softmax turns scores into weights; the output is the weight-mixed sum of the values.</figcaption>
+</figure>
+
+<h3>Derivation</h3>
+<ol class="steps">
+<li><span class="why">hard lookup is not differentiable</span> A dictionary returns $z_i=v_{j^\star}$ with $j^\star=\arg\max_j q_i^\top k_j$. The argmax is piecewise constant, so no gradient reaches $W_Q,W_K$. We want a smooth surrogate.</li>
+<li><span class="why">learned projections (Oct 17 §12.2)</span> $$Q=XW_Q,\qquad K=XW_K,\qquad V=XW_V,$$ so row $i$ gives $q_i,k_i,v_i$ for token $i$; all three are still length-$T$ sequences.</li>
+<li><span class="why">similarity = inner product</span> $s_{ij}=q_i^\top k_j$; with scaling (proof 4) $s_{ij}/\sqrt{d_k}$.</li>
+<li><span class="why">softmax turns scores into weights</span> $$\alpha_{ij}=\frac{\exp(s_{ij}/\sqrt{d_k})}{\sum_{r=1}^{T}\exp(s_{ir}/\sqrt{d_k})}.$$</li>
+<li><span class="why">exp is strictly positive; dividing by the sum normalises</span> $$\alpha_{ij}&gt;0,\qquad \sum_{j=1}^{T}\alpha_{ij}=\frac{\sum_j\exp(s_{ij}/\sqrt{d_k})}{\sum_r\exp(s_{ir}/\sqrt{d_k})}=1.$$ Hence $0&lt;\alpha_{ij}&lt;1$ when $T\ge2$.</li>
+<li><span class="why">weighted sum of the values</span> $z_i=\sum_{j=1}^{T}\alpha_{ij}v_j$. By step 5 this is a <em>convex combination</em> of $v_1,\ldots,v_T$.</li>
+<li><span class="why">convex combination stays inside the range (step filled in — not written out in class)</span> For each coordinate $c$: $$\min_j v_{jc}=\sum_j\alpha_{ij}\min_r v_{rc}\le z_{ic}=\sum_j\alpha_{ij}v_{jc}\le\sum_j\alpha_{ij}\max_r v_{rc}=\max_j v_{jc}.$$ Attention can only mix existing values, never create a value outside their span.</li>
+<li><span class="why">stack the rows</span> $A=\operatorname{softmax}_{\text{row}}(QK^\top/\sqrt{d_k})\in\mathbb R^{T\times T}$, $Z=AV$, i.e. $$\operatorname{Attention}(Q,K,V)=\operatorname{softmax}\!\Big(\frac{QK^\top}{\sqrt{d_k}}\Big)V.$$</li>
+<li><span class="why">recover the hard lookup as a limit (extra)</span> If one score exceeds all others by a gap $g\to\infty$, then $\alpha_{ij^\star}\to1$ and $z_i\to v_{j^\star}$: the dictionary lookup is the zero-temperature limit.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check (lecture example, then a full 3-token example)</span>
+<p><strong>(a) Lecture example.</strong> Scaled scores $[2,1,0]$: $e^2=7.389,\ e^1=2.718,\ e^0=1$, sum $11.107$; weights $[0.665,0.245,0.090]$, so $z_i\approx0.665v_1+0.245v_2+0.090v_3$. The first value dominates because its key has the highest score.</p>
+<p><strong>(b) Full example</strong> (our own numbers, $d_k=2$): $Q=K=\begin{pmatrix}1&amp;0\\0&amp;1\\1&amp;1\end{pmatrix}$, $V=\begin{pmatrix}1&amp;0\\0&amp;2\\3&amp;1\end{pmatrix}$.</p>
+<div class="table-wrap"><table>
+<tr><th>step</th><th>result</th></tr>
+<tr><td>scores $QK^\top$</td><td>rows $[1,0,1],\ [0,1,1],\ [1,1,2]$</td></tr>
+<tr><td>scaled by $1/\sqrt2=0.7071$</td><td>row 1: $[0.707,0,0.707]$; row 3: $[0.707,0.707,1.414]$</td></tr>
+<tr><td>softmax row 1</td><td>$e^{0.707}=2.028$: $[2.028,1,2.028]/5.056=[0.401,0.198,0.401]$</td></tr>
+<tr><td>output $z_1=0.401v_1+0.198v_2+0.401v_3$</td><td>$(0.401\cdot1+0+0.401\cdot3,\ 0+0.198\cdot2+0.401\cdot1)=(1.604,\ 0.797)$</td></tr>
+<tr><td>row 3 weights, output $z_3$</td><td>$[0.248,0.248,0.504]$; $z_3=(1.759,\ 1.000)$ (inside the range of the values: first coordinate between $0$ and $3$)</td></tr>
+</table></div></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Learnable: $W_Q,W_K,W_V$. $Q,K\in\mathbb R^{T\times d_k}$ (the same width), $V\in\mathbb R^{T\times d_v}$ ($d_v$ may differ from $d_k$). Output $Z\in\mathbb R^{T\times d_v}$.</li>
+<li><strong>Why a separate value?</strong> $q\cdot k$ gives a <em>scalar</em> weight; you need a vector of content to mix. A simplified variant could weight the inputs $x_j$ directly, so $W_V$ is a flexible choice, not a necessity. The names query/key/value are only intuition; the lecturer stressed they are just three learned projections.</li>
+<li>The inner product is a learned similarity score, not a calibrated probability; the softmax weights are the normalised attention.</li>
+<li>Softmax is the only nonlinearity in attention; projections and sums are linear (used in proof 8).</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Softmax over the wrong axis. The softmax is taken <strong>row-wise</strong> (over the keys $j$ for each fixed query $i$), so each <em>row</em> of $A$ sums to 1 — columns need not.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="scale" class="proof-head">4. Why divide by the square root of the key dimension</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>If the components of $q$ and $k$ are independent with mean $0$ and variance $1$, then $\operatorname{Var}(q^\top k)=d_k$, so the standard deviation grows like $\sqrt{d_k}$; dividing by $\sqrt{d_k}$ restores unit variance and keeps the softmax out of its saturated, zero-gradient regime. (Oct 17 notes §12.3 gave the verbal reason; the variance computation is the standard argument, filled in.) Used later in: every attention layer, including multi-head (proof 7).</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 290" style="max-width:100%;height:auto" role="img" aria-label="Distribution of the dot product before and after scaling, and the resulting softmax sharpness">
+  <text x="190" y="20" text-anchor="middle" font-size="14" font-weight="700">Score q . k for d_k = 64</text>
+  <line x1="14" y1="170" x2="366" y2="170" stroke="var(--text-3)"/>
+  <path d="M17.2,169.8 L19.0,169.8 L20.8,169.8 L22.6,169.8 L24.4,169.8 L26.2,169.7 L28.0,169.7 L29.8,169.7 L31.6,169.7 L33.4,169.6 L35.2,169.6 L37.0,169.6 L38.8,169.5 L40.6,169.5 L42.4,169.4 L44.2,169.4 L46.0,169.3 L47.8,169.3 L49.6,169.2 L51.4,169.2 L53.2,169.1 L55.0,169.0 L56.8,169.0 L58.6,168.9 L60.4,168.8 L62.2,168.7 L64.0,168.6 L65.8,168.5 L67.6,168.4 L69.4,168.3 L71.2,168.2 L73.0,168.1 L74.8,168.0 L76.6,167.8 L78.4,167.7 L80.2,167.6 L82.0,167.4 L83.8,167.3 L85.6,167.1 L87.4,166.9 L89.2,166.8 L91.0,166.6 L92.8,166.4 L94.6,166.2 L96.4,166.0 L98.2,165.8 L100.0,165.6 L101.8,165.4 L103.6,165.1 L105.4,164.9 L107.2,164.7 L109.0,164.4 L110.8,164.2 L112.6,163.9 L114.4,163.7 L116.2,163.4 L118.0,163.2 L119.8,162.9 L121.6,162.6 L123.4,162.3 L125.2,162.1 L127.0,161.8 L128.8,161.5 L130.6,161.2 L132.4,160.9 L134.2,160.6 L136.0,160.4 L137.8,160.1 L139.6,159.8 L141.4,159.5 L143.2,159.2 L145.0,159.0 L146.8,158.7 L148.6,158.4 L150.4,158.2 L152.2,157.9 L154.0,157.7 L155.8,157.5 L157.6,157.2 L159.4,157.0 L161.2,156.8 L163.0,156.6 L164.8,156.4 L166.6,156.2 L168.4,156.1 L170.2,155.9 L172.0,155.8 L173.8,155.6 L175.6,155.5 L177.4,155.4 L179.2,155.3 L181.0,155.2 L182.8,155.2 L184.6,155.1 L186.4,155.1 L188.2,155.0 L190.0,155.0 L191.8,155.0 L193.6,155.1 L195.4,155.1 L197.2,155.2 L199.0,155.2 L200.8,155.3 L202.6,155.4 L204.4,155.5 L206.2,155.6 L208.0,155.8 L209.8,155.9 L211.6,156.1 L213.4,156.2 L215.2,156.4 L217.0,156.6 L218.8,156.8 L220.6,157.0 L222.4,157.2 L224.2,157.5 L226.0,157.7 L227.8,157.9 L229.6,158.2 L231.4,158.4 L233.2,158.7 L235.0,159.0 L236.8,159.2 L238.6,159.5 L240.4,159.8 L242.2,160.1 L244.0,160.4 L245.8,160.6 L247.6,160.9 L249.4,161.2 L251.2,161.5 L253.0,161.8 L254.8,162.1 L256.6,162.3 L258.4,162.6 L260.2,162.9 L262.0,163.2 L263.8,163.4 L265.6,163.7 L267.4,163.9 L269.2,164.2 L271.0,164.4 L272.8,164.7 L274.6,164.9 L276.4,165.1 L278.2,165.4 L280.0,165.6 L281.8,165.8 L283.6,166.0 L285.4,166.2 L287.2,166.4 L289.0,166.6 L290.8,166.8 L292.6,166.9 L294.4,167.1 L296.2,167.3 L298.0,167.4 L299.8,167.6 L301.6,167.7 L303.4,167.8 L305.2,168.0 L307.0,168.1 L308.8,168.2 L310.6,168.3 L312.4,168.4 L314.2,168.5 L316.0,168.6 L317.8,168.7 L319.6,168.8 L321.4,168.9 L323.2,169.0 L325.0,169.0 L326.8,169.1 L328.6,169.2 L330.4,169.2 L332.2,169.3 L334.0,169.3 L335.8,169.4 L337.6,169.4 L339.4,169.5 L341.2,169.5 L343.0,169.6 L344.8,169.6 L346.6,169.6 L348.4,169.7 L350.2,169.7 L352.0,169.7 L353.8,169.7 L355.6,169.8 L357.4,169.8 L359.2,169.8 L361.0,169.8 L362.8,169.8" fill="none" stroke="var(--s2)" stroke-width="2.4"/>
+  <path d="M17.2,170.0 L19.0,170.0 L20.8,170.0 L22.6,170.0 L24.4,170.0 L26.2,170.0 L28.0,170.0 L29.8,170.0 L31.6,170.0 L33.4,170.0 L35.2,170.0 L37.0,170.0 L38.8,170.0 L40.6,170.0 L42.4,170.0 L44.2,170.0 L46.0,170.0 L47.8,170.0 L49.6,170.0 L51.4,170.0 L53.2,170.0 L55.0,170.0 L56.8,170.0 L58.6,170.0 L60.4,170.0 L62.2,170.0 L64.0,170.0 L65.8,170.0 L67.6,170.0 L69.4,170.0 L71.2,170.0 L73.0,170.0 L74.8,170.0 L76.6,170.0 L78.4,170.0 L80.2,170.0 L82.0,170.0 L83.8,170.0 L85.6,170.0 L87.4,170.0 L89.2,170.0 L91.0,170.0 L92.8,170.0 L94.6,170.0 L96.4,170.0 L98.2,170.0 L100.0,170.0 L101.8,170.0 L103.6,170.0 L105.4,170.0 L107.2,170.0 L109.0,170.0 L110.8,170.0 L112.6,170.0 L114.4,170.0 L116.2,170.0 L118.0,170.0 L119.8,170.0 L121.6,170.0 L123.4,170.0 L125.2,170.0 L127.0,170.0 L128.8,170.0 L130.6,170.0 L132.4,170.0 L134.2,170.0 L136.0,170.0 L137.8,170.0 L139.6,170.0 L141.4,170.0 L143.2,170.0 L145.0,170.0 L146.8,170.0 L148.6,170.0 L150.4,170.0 L152.2,170.0 L154.0,170.0 L155.8,170.0 L157.6,170.0 L159.4,170.0 L161.2,170.0 L163.0,169.9 L164.8,169.7 L166.6,169.4 L168.4,168.7 L170.2,167.3 L172.0,164.7 L173.8,160.5 L175.6,153.8 L177.4,144.1 L179.2,131.1 L181.0,115.2 L182.8,97.4 L184.6,79.7 L186.4,64.4 L188.2,54.0 L190.0,50.3 L191.8,54.0 L193.6,64.4 L195.4,79.7 L197.2,97.4 L199.0,115.2 L200.8,131.1 L202.6,144.1 L204.4,153.8 L206.2,160.5 L208.0,164.7 L209.8,167.3 L211.6,168.7 L213.4,169.4 L215.2,169.7 L217.0,169.9 L218.8,170.0 L220.6,170.0 L222.4,170.0 L224.2,170.0 L226.0,170.0 L227.8,170.0 L229.6,170.0 L231.4,170.0 L233.2,170.0 L235.0,170.0 L236.8,170.0 L238.6,170.0 L240.4,170.0 L242.2,170.0 L244.0,170.0 L245.8,170.0 L247.6,170.0 L249.4,170.0 L251.2,170.0 L253.0,170.0 L254.8,170.0 L256.6,170.0 L258.4,170.0 L260.2,170.0 L262.0,170.0 L263.8,170.0 L265.6,170.0 L267.4,170.0 L269.2,170.0 L271.0,170.0 L272.8,170.0 L274.6,170.0 L276.4,170.0 L278.2,170.0 L280.0,170.0 L281.8,170.0 L283.6,170.0 L285.4,170.0 L287.2,170.0 L289.0,170.0 L290.8,170.0 L292.6,170.0 L294.4,170.0 L296.2,170.0 L298.0,170.0 L299.8,170.0 L301.6,170.0 L303.4,170.0 L305.2,170.0 L307.0,170.0 L308.8,170.0 L310.6,170.0 L312.4,170.0 L314.2,170.0 L316.0,170.0 L317.8,170.0 L319.6,170.0 L321.4,170.0 L323.2,170.0 L325.0,170.0 L326.8,170.0 L328.6,170.0 L330.4,170.0 L332.2,170.0 L334.0,170.0 L335.8,170.0 L337.6,170.0 L339.4,170.0 L341.2,170.0 L343.0,170.0 L344.8,170.0 L346.6,170.0 L348.4,170.0 L350.2,170.0 L352.0,170.0 L353.8,170.0 L355.6,170.0 L357.4,170.0 L359.2,170.0 L361.0,170.0 L362.8,170.0" fill="var(--accent-soft)" stroke="var(--s1)" stroke-width="2.4"/>
+  <line x1="190" y1="170" x2="190" y2="176" stroke="var(--text-3)"/><text x="190" y="190" text-anchor="middle" font-size="12">0</text>
+  <line x1="247.6" y1="170" x2="247.6" y2="176" stroke="var(--text-3)"/><text x="247.6" y="190" text-anchor="middle" font-size="12">+8</text>
+  <line x1="132.4" y1="170" x2="132.4" y2="176" stroke="var(--text-3)"/><text x="132.4" y="190" text-anchor="middle" font-size="12">-8</text>
+  <text x="224" y="82" font-size="12.5" font-weight="700" style="fill:var(--s1)">scaled: std 1</text>
+  <text x="252" y="150" font-size="12.5" font-weight="700" style="fill:var(--s2)">unscaled: std 8</text>
+  <text x="190" y="214" text-anchor="middle" font-size="12" class="muted-t">Var(q.k) = d_k = 64, so std = 8</text>
+  <text x="190" y="230" text-anchor="middle" font-size="12" class="muted-t">dividing by sqrt(d_k) = 8 gives std 1</text>
+  <text x="190" y="246" text-anchor="middle" font-size="12" class="muted-t">unscaled spread +-16: exp() differs by e^32</text>
+  <text x="570" y="20" text-anchor="middle" font-size="14" font-weight="700">Mean largest softmax weight (10 keys)</text>
+  <line x1="440" y1="170" x2="700" y2="170" stroke="var(--text-3)"/>
+  <rect x="470" y="57.55" width="70" height="112.45" fill="var(--s2)"/>
+  <rect x="600" y="128.26999999999998" width="70" height="41.730000000000004" fill="var(--s1)"/>
+  <text x="505" y="51.55" text-anchor="middle" font-size="13" font-weight="700">0.865</text>
+  <text x="635" y="122.26999999999998" text-anchor="middle" font-size="13" font-weight="700">0.321</text>
+  <text x="505" y="188" text-anchor="middle" font-size="12">unscaled</text>
+  <text x="635" y="188" text-anchor="middle" font-size="12">scaled</text>
+  <text x="570" y="214" text-anchor="middle" font-size="12" class="muted-t">unscaled: nearly one-hot, gradient close to 0</text>
+  <text x="570" y="230" text-anchor="middle" font-size="12" class="muted-t">scaled: still spread out, gradient alive</text>
+  <text x="380" y="276" text-anchor="middle" font-size="12" class="muted-t">Python check: 5000 random draws, q,k components iid N(0,1), 10 keys per query</text>
+</svg>
+<figcaption class="small muted">Figure 4.1 — Left: for $d_k=64$ the raw score has standard deviation 8; scaling by $1/\sqrt{64}$ brings it to 1. Right: with 10 keys, unscaled scores make the softmax almost one-hot (mean largest weight 0.865); scaled scores keep it spread (0.321).</figcaption>
+</figure>
+
+<h3>Variance of the dot product <span class="why">step filled in — not written out in class</span></h3>
+<ol class="steps">
+<li><span class="why">assumption</span> $q_m,k_m$ ($m=1,\ldots,d_k$) are independent, $\mathbb E[q_m]=\mathbb E[k_m]=0$, $\operatorname{Var}(q_m)=\operatorname{Var}(k_m)=1$. Then $\mathbb E[q_m^2]=\mathbb E[k_m^2]=1$.</li>
+<li><span class="why">expand the dot product</span> $$q^\top k=\sum_{m=1}^{d_k}q_mk_m.$$</li>
+<li><span class="why">independence of $q_m,k_m$</span> The mean of each term: $$\mathbb E[q_mk_m]=\mathbb E[q_m]\,\mathbb E[k_m]=0.$$</li>
+<li><span class="why">variance = second moment since mean is 0; independence again</span> $$\operatorname{Var}(q_mk_m)=\mathbb E[q_m^2k_m^2]=\mathbb E[q_m^2]\,\mathbb E[k_m^2]=1\cdot1=1.$$</li>
+<li><span class="why">terms are independent across $m$, so variances add</span> $$\operatorname{Var}(q^\top k)=\sum_{m=1}^{d_k}\operatorname{Var}(q_mk_m)=d_k,\qquad \text{std}=\sqrt{d_k}.$$</li>
+<li><span class="why">$\operatorname{Var}(X/c)=\operatorname{Var}(X)/c^2$</span> Choose $c=\sqrt{d_k}$: $$\operatorname{Var}\!\Big(\frac{q^\top k}{\sqrt{d_k}}\Big)=\frac{d_k}{d_k}=1,$$ independent of $d_k$.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<h3>Why large scores hurt: softmax saturation <span class="why">step filled in — not written out in class</span></h3>
+<ol class="steps">
+<li><span class="why">quotient rule</span> For $\alpha_j=e^{s_j}/\sum_re^{s_r}$: $$\frac{\partial\alpha_j}{\partial s_l}=\alpha_j(\delta_{jl}-\alpha_l),\qquad\text{i.e. }\ \frac{\partial\boldsymbol\alpha}{\partial\mathbf s}=\operatorname{diag}(\boldsymbol\alpha)-\boldsymbol\alpha\boldsymbol\alpha^\top.$$</li>
+<li><span class="why">large spread of scores makes the softmax nearly one-hot</span> If $\alpha_{j^\star}\to1$ and the rest $\to0$, every entry of the Jacobian $\to0$ (diagonal $\alpha_j(1-\alpha_j)\to0$, off-diagonal $-\alpha_j\alpha_l\to0$).</li>
+<li><span class="why">chain rule</span> The loss gradient reaching $W_Q,W_K$ passes through this Jacobian, so it vanishes: the weights stop learning which key to attend to. Large logits are also numerically unstable in $\exp$ (the lecture's "numerically poorly behaved").</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>$d_k=64$: $\operatorname{Var}(q^\top k)=64$, std $=8$; divide by $\sqrt{64}=8$ gives std $1$. Simulation (200 000 pairs, iid $N(0,1)$ components), std of the raw score: $d_k=4\to2.00$, $16\to3.99$, $64\to8.00$, $256\to15.98$ (theory $\sqrt{d_k}=2,4,8,16$); after scaling all are $\approx1.00$. Saturation test ($d_k=64$, 10 keys, 5000 draws): unscaled mean largest weight $0.865$ and mean diagonal Jacobian $\sum_j\alpha_j(1-\alpha_j)=0.19$; scaled $0.321$ and $0.80$ — the gradient signal is about four times larger.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Scaling factor is $1/\sqrt{d_k}$ with $d_k$ the <strong>query/key</strong> dimension (not $d_M$ and not $d_v$).</li>
+<li>Reasoning to give: dot products grow with the dimension; large logits make softmax too sharp / numerically poor with weak gradients. The one-line quantitative version is $\operatorname{Var}(q^\top k)=d_k$.</li>
+<li>Always state the assumption (independent, zero mean, unit variance); it is exact at initialisation, only approximate during training.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Dividing by $d_k$ instead of $\sqrt{d_k}$: variance scales with the <em>square</em> of the divisor, so dividing by $d_k$ would give variance $1/d_k$, over-flattening the attention.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="causal" class="proof-head">5. The causal mask enforces the autoregressive conditional</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>Adding $M_{ij}=0$ for $j\le i$ and $-\infty$ for $j&gt;i$ to the scores before the softmax makes all weights on future tokens exactly zero, renormalises the weights over the allowed prefix, and (through the whole stack) makes the output at position $i$ a function of $x_1,\ldots,x_i$ only. (Oct 17 notes §13; Oct 24 §3.) Used later in: parallel teacher-forcing training (proof 12).</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 340" style="max-width:100%;height:auto" role="img" aria-label="Attention weight matrix without and with the causal mask">
+  <g><text x="175.0" y="24" text-anchor="middle" font-size="14" font-weight="700">Plain attention (rows sum to 1)</text>
+  <text x="67.0" y="44" text-anchor="middle" font-size="12" class="muted-t">k1</text>
+  <text x="121.0" y="44" text-anchor="middle" font-size="12" class="muted-t">k2</text>
+  <text x="175.0" y="44" text-anchor="middle" font-size="12" class="muted-t">k3</text>
+  <text x="229.0" y="44" text-anchor="middle" font-size="12" class="muted-t">k4</text>
+  <text x="283.0" y="44" text-anchor="middle" font-size="12" class="muted-t">k5</text>
+  <text x="30" y="81.0" text-anchor="end" font-size="12" class="muted-t">q1</text>
+  <rect x="40" y="50" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="65.5" y="80.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="94" y="50" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="119.5" y="80.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="148" y="50" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="173.5" y="80.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="202" y="50" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="227.5" y="80.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="256" y="50" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="281.5" y="80.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <text x="30" y="135.0" text-anchor="end" font-size="12" class="muted-t">q2</text>
+  <rect x="40" y="104" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="65.5" y="134.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="94" y="104" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="119.5" y="134.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="148" y="104" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="173.5" y="134.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="202" y="104" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="227.5" y="134.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="256" y="104" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="281.5" y="134.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <text x="30" y="189.0" text-anchor="end" font-size="12" class="muted-t">q3</text>
+  <rect x="40" y="158" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="65.5" y="188.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="94" y="158" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="119.5" y="188.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="148" y="158" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="173.5" y="188.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="202" y="158" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="227.5" y="188.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="256" y="158" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="281.5" y="188.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <text x="30" y="243.0" text-anchor="end" font-size="12" class="muted-t">q4</text>
+  <rect x="40" y="212" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="65.5" y="242.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="94" y="212" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="119.5" y="242.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="148" y="212" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="173.5" y="242.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="202" y="212" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="227.5" y="242.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="256" y="212" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="281.5" y="242.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <text x="30" y="297.0" text-anchor="end" font-size="12" class="muted-t">q5</text>
+  <rect x="40" y="266" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="65.5" y="296.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="94" y="266" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="119.5" y="296.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="148" y="266" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="173.5" y="296.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="202" y="266" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="227.5" y="296.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="256" y="266" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="281.5" y="296.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text></g>
+  <g transform="translate(390,0)"><text x="175.0" y="24" text-anchor="middle" font-size="14" font-weight="700">Causal attention (lower triangle only)</text>
+  <text x="67.0" y="44" text-anchor="middle" font-size="12" class="muted-t">k1</text>
+  <text x="121.0" y="44" text-anchor="middle" font-size="12" class="muted-t">k2</text>
+  <text x="175.0" y="44" text-anchor="middle" font-size="12" class="muted-t">k3</text>
+  <text x="229.0" y="44" text-anchor="middle" font-size="12" class="muted-t">k4</text>
+  <text x="283.0" y="44" text-anchor="middle" font-size="12" class="muted-t">k5</text>
+  <text x="30" y="81.0" text-anchor="end" font-size="12" class="muted-t">q1</text>
+  <rect x="40" y="50" width="51" height="51" rx="4" fill="var(--s1)" opacity="1.00"/>
+  <text x="65.5" y="80.0" text-anchor="middle" font-size="12" font-weight="700">1.00</text>
+  <rect x="94" y="50" width="51" height="51" rx="4" fill="var(--surface-2)" stroke="var(--text-3)" stroke-dasharray="3 3"/>
+  <text x="119.5" y="75.0" text-anchor="middle" font-size="11" class="muted-t">-inf</text><text x="119.5" y="89.0" text-anchor="middle" font-size="11" class="muted-t">w = 0</text>
+  <rect x="148" y="50" width="51" height="51" rx="4" fill="var(--surface-2)" stroke="var(--text-3)" stroke-dasharray="3 3"/>
+  <text x="173.5" y="75.0" text-anchor="middle" font-size="11" class="muted-t">-inf</text><text x="173.5" y="89.0" text-anchor="middle" font-size="11" class="muted-t">w = 0</text>
+  <rect x="202" y="50" width="51" height="51" rx="4" fill="var(--surface-2)" stroke="var(--text-3)" stroke-dasharray="3 3"/>
+  <text x="227.5" y="75.0" text-anchor="middle" font-size="11" class="muted-t">-inf</text><text x="227.5" y="89.0" text-anchor="middle" font-size="11" class="muted-t">w = 0</text>
+  <rect x="256" y="50" width="51" height="51" rx="4" fill="var(--surface-2)" stroke="var(--text-3)" stroke-dasharray="3 3"/>
+  <text x="281.5" y="75.0" text-anchor="middle" font-size="11" class="muted-t">-inf</text><text x="281.5" y="89.0" text-anchor="middle" font-size="11" class="muted-t">w = 0</text>
+  <text x="30" y="135.0" text-anchor="end" font-size="12" class="muted-t">q2</text>
+  <rect x="40" y="104" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.57"/>
+  <text x="65.5" y="134.0" text-anchor="middle" font-size="12" font-weight="700">0.50</text>
+  <rect x="94" y="104" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.57"/>
+  <text x="119.5" y="134.0" text-anchor="middle" font-size="12" font-weight="700">0.50</text>
+  <rect x="148" y="104" width="51" height="51" rx="4" fill="var(--surface-2)" stroke="var(--text-3)" stroke-dasharray="3 3"/>
+  <text x="173.5" y="129.0" text-anchor="middle" font-size="11" class="muted-t">-inf</text><text x="173.5" y="143.0" text-anchor="middle" font-size="11" class="muted-t">w = 0</text>
+  <rect x="202" y="104" width="51" height="51" rx="4" fill="var(--surface-2)" stroke="var(--text-3)" stroke-dasharray="3 3"/>
+  <text x="227.5" y="129.0" text-anchor="middle" font-size="11" class="muted-t">-inf</text><text x="227.5" y="143.0" text-anchor="middle" font-size="11" class="muted-t">w = 0</text>
+  <rect x="256" y="104" width="51" height="51" rx="4" fill="var(--surface-2)" stroke="var(--text-3)" stroke-dasharray="3 3"/>
+  <text x="281.5" y="129.0" text-anchor="middle" font-size="11" class="muted-t">-inf</text><text x="281.5" y="143.0" text-anchor="middle" font-size="11" class="muted-t">w = 0</text>
+  <text x="30" y="189.0" text-anchor="end" font-size="12" class="muted-t">q3</text>
+  <rect x="40" y="158" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.43"/>
+  <text x="65.5" y="188.0" text-anchor="middle" font-size="12" font-weight="700">0.33</text>
+  <rect x="94" y="158" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.43"/>
+  <text x="119.5" y="188.0" text-anchor="middle" font-size="12" font-weight="700">0.33</text>
+  <rect x="148" y="158" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.43"/>
+  <text x="173.5" y="188.0" text-anchor="middle" font-size="12" font-weight="700">0.33</text>
+  <rect x="202" y="158" width="51" height="51" rx="4" fill="var(--surface-2)" stroke="var(--text-3)" stroke-dasharray="3 3"/>
+  <text x="227.5" y="183.0" text-anchor="middle" font-size="11" class="muted-t">-inf</text><text x="227.5" y="197.0" text-anchor="middle" font-size="11" class="muted-t">w = 0</text>
+  <rect x="256" y="158" width="51" height="51" rx="4" fill="var(--surface-2)" stroke="var(--text-3)" stroke-dasharray="3 3"/>
+  <text x="281.5" y="183.0" text-anchor="middle" font-size="11" class="muted-t">-inf</text><text x="281.5" y="197.0" text-anchor="middle" font-size="11" class="muted-t">w = 0</text>
+  <text x="30" y="243.0" text-anchor="end" font-size="12" class="muted-t">q4</text>
+  <rect x="40" y="212" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.36"/>
+  <text x="65.5" y="242.0" text-anchor="middle" font-size="12" font-weight="700">0.25</text>
+  <rect x="94" y="212" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.36"/>
+  <text x="119.5" y="242.0" text-anchor="middle" font-size="12" font-weight="700">0.25</text>
+  <rect x="148" y="212" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.36"/>
+  <text x="173.5" y="242.0" text-anchor="middle" font-size="12" font-weight="700">0.25</text>
+  <rect x="202" y="212" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.36"/>
+  <text x="227.5" y="242.0" text-anchor="middle" font-size="12" font-weight="700">0.25</text>
+  <rect x="256" y="212" width="51" height="51" rx="4" fill="var(--surface-2)" stroke="var(--text-3)" stroke-dasharray="3 3"/>
+  <text x="281.5" y="237.0" text-anchor="middle" font-size="11" class="muted-t">-inf</text><text x="281.5" y="251.0" text-anchor="middle" font-size="11" class="muted-t">w = 0</text>
+  <text x="30" y="297.0" text-anchor="end" font-size="12" class="muted-t">q5</text>
+  <rect x="40" y="266" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="65.5" y="296.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="94" y="266" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="119.5" y="296.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="148" y="266" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="173.5" y="296.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="202" y="266" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="227.5" y="296.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text>
+  <rect x="256" y="266" width="51" height="51" rx="4" fill="var(--s1)" opacity="0.32"/>
+  <text x="281.5" y="296.0" text-anchor="middle" font-size="12" font-weight="700">0.20</text></g>
+  <text x="380" y="334" text-anchor="middle" font-size="12" class="muted-t">row i = query position, column j = key position; weights drawn uniform for illustration, each row still sums to 1</text>
+</svg>
+<figcaption class="small muted">Figure 5.1 — Left: plain self-attention, every query sees every key. Right: after adding $M$ the upper triangle becomes $-\infty$, so those weights are exactly zero and each row $i$ renormalises over its $i$ allowed entries (row 1 has weight 1 on itself).</figcaption>
+</figure>
+
+<h3>Proof</h3>
+<ol class="steps">
+<li><span class="why">the requirement</span> An autoregressive model needs $p_\theta(x_t\mid x_{&lt;t})$ not to depend on $x_{t+1},\ldots,x_T$, otherwise training would "see the answer".</li>
+<li><span class="why">additive mask on the scaled scores</span> $S_{\text{causal}}=\dfrac{QK^\top}{\sqrt{d_k}}+M$, so $s'_{ij}=s_{ij}$ for $j\le i$ and $s'_{ij}=-\infty$ for $j&gt;i$.</li>
+<li><span class="why">$\exp(-\infty)=0$</span> $$\alpha_{ij}=\frac{\exp(s'_{ij})}{\sum_{r=1}^{T}\exp(s'_{ir})}=0\qquad\text{for all }j&gt;i.$$</li>
+<li><span class="why">the denominator is well defined: the diagonal term $r=i$ is allowed</span> $$\sum_{r}\exp(s'_{ir})=\sum_{r\le i}\exp(s_{ir})&gt;0.$$</li>
+<li><span class="why">renormalised softmax over the prefix</span> For $j\le i$: $$\alpha_{ij}=\frac{\exp(s_{ij})}{\sum_{r\le i}\exp(s_{ir})},\qquad\sum_{j\le i}\alpha_{ij}=1.$$ So row $i$ is an ordinary softmax over only the allowed keys: the weights on the past are renormalised, not just truncated.</li>
+<li><span class="why">sum has no future terms</span> $$z_i=\sum_{j=1}^{T}\alpha_{ij}v_j=\sum_{j\le i}\alpha_{ij}v_j.$$</li>
+<li><span class="why">$q_i,k_j,v_j$ are position-wise functions of $x_i,x_j$ only (step filled in — not written out in class)</span> Hence $z_i$ depends only on $x_1,\ldots,x_i$. Row $1$: $\alpha_{11}=1$, so $z_1=v_1$.</li>
+<li><span class="why">induction over layers (step filled in)</span> Embedding, positional encoding, feed-forward, residual and layer norm all act on each position separately (proofs 8–10), so if layer $\ell$'s input at position $i$ depends only on $x_{\le i}$, so does its output. Therefore the final output at position $i$, which parameterises the prediction of $x_{i+1}$, depends only on $x_{\le i}=x_{&lt;i+1}$: exactly $p_\theta(x_{i+1}\mid x_{&lt;i+1})$. Causality holds by construction.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check (same example as proof 3)</span>
+<p>Scaled scores: row 1 $[0.707,0,0.707]$, row 2 $[0,0.707,0.707]$, row 3 $[0.707,0.707,1.414]$. After the mask:</p>
+<ul>
+<li>Row 1: only $j=1$ allowed, $\alpha=[1,0,0]$, $z_1=v_1=(1,0)$.</li>
+<li>Row 2: allowed scores $[0,0.707]$, $e^0=1,\ e^{0.707}=2.028$, $\alpha=[0.330,0.670,0]$, $z_2=0.330(1,0)+0.670(0,2)=(0.330,\ 1.340)$. (Unmasked row 2 gave $[0.198,0.401,0.401]$ with weight 0.401 on the future token 3.)</li>
+<li>Row 3: nothing is masked, so it is unchanged: $[0.248,0.248,0.504]$, $z_3=(1.759,1.000)$.</li>
+<li>Causality test: change $v_3$ to anything; $z_1,z_2$ do not change (their weight on token 3 is $0$), only $z_3$ does.</li>
+</ul></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>The mask is <strong>added before the softmax</strong>, not multiplied after. Allowed entries add $0$, forbidden ones $-\infty$; the result is a lower-triangular weight matrix.</li>
+<li>The professor said "$j&lt;i$" in class, but the diagonal is also allowed ($j\le i$): a token may attend to itself.</li>
+<li>In code one uses a large negative number (for example $-10^9$) instead of a literal $-\infty$ (extra remark, same effect).</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Zeroing the weights <em>after</em> the softmax: the rows would no longer sum to 1 (and the surviving weights would not be a softmax over the past). The $-\infty$ must go in before normalisation.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="shapes" class="proof-head">6. Shape bookkeeping and the quadratic cost</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>Attention maps a $T\times d_M$ matrix to a $T\times d_v$ matrix through a $T\times T$ weight matrix; its time and memory cost grow quadratically in the context length $T$, while the parameter count does not depend on $T$. (Oct 24 notes §2.2 for shapes; the quadratic cost from the Q&amp;A on sliding-window and linearised attention. The explicit counts are filled in.) Used later in: why long contexts need sub-quadratic variants.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 270" style="max-width:100%;height:auto" role="img" aria-label="Matrix shapes through attention: X to Q and K, T by T weight matrix, times V gives Z">
+  <defs><marker id="p07f1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <g font-size="13" text-anchor="middle">
+    <rect x="20" y="40" width="56" height="130" rx="4" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="48" y="110">X</text>
+    <rect x="130" y="40" width="34" height="130" rx="4" fill="var(--surface-2)" stroke="var(--s2)"/><text x="147" y="110">Q</text>
+    <text x="188" y="110" font-size="16">×</text>
+    <rect x="206" y="88" width="130" height="34" rx="4" fill="var(--surface-2)" stroke="var(--s2)"/><text x="271" y="110">Kᵀ</text>
+    <text x="358" y="110" font-size="16">→</text>
+    <rect x="384" y="40" width="130" height="130" rx="4" fill="var(--accent-soft)" stroke="var(--s3)" stroke-width="2"/><text x="449" y="102">A = softmax(·)</text><text x="449" y="120" class="muted-t" font-size="11.5">T × T  (the cost)</text>
+    <text x="536" y="110" font-size="16">×</text>
+    <rect x="556" y="40" width="34" height="130" rx="4" fill="var(--surface-2)" stroke="var(--s2)"/><text x="573" y="110">V</text>
+    <text x="612" y="110" font-size="16">=</text>
+    <rect x="636" y="40" width="34" height="130" rx="4" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="653" y="110">Z</text>
+  </g>
+  <g font-size="12" text-anchor="middle" class="muted-t">
+    <text x="48" y="192">T × d_M</text><text x="147" y="192">T × d_k</text><text x="271" y="192">d_k × T</text><text x="449" y="192">T × T</text><text x="573" y="192">T × d_v</text><text x="653" y="192">T × d_v</text>
+    <text x="98" y="30">W_Q, W_K, W_V</text>
+  </g>
+  <line x1="78" y1="105" x2="126" y2="105" stroke="var(--text-3)" stroke-width="1.6" marker-end="url(#p07f1)"/>
+  <text x="380" y="232" text-anchor="middle" font-size="13" font-weight="700">cost: QKᵀ ≈ T²·d_k, AV ≈ T²·d_v multiply-adds; memory of A: T²</text>
+  <text x="380" y="252" text-anchor="middle" font-size="12" class="muted-t">doubling the context T multiplies the attention cost and memory by 4</text>
+</svg>
+<figcaption class="small muted">Figure 6.1 — Shapes through one attention head. The inner dimensions always match ($d_k$ for $QK^\top$, $T$ for $AV$); the only $T\times T$ object is the weight matrix.</figcaption>
+</figure>
+
+<ol class="steps">
+<li><span class="why">projections</span> $W_Q,W_K\in\mathbb R^{d_M\times d_k}$, $W_V\in\mathbb R^{d_M\times d_v}$, $X\in\mathbb R^{T\times d_M}$ $\Rightarrow$ $$Q,K\in\mathbb R^{T\times d_k},\qquad V\in\mathbb R^{T\times d_v}.$$</li>
+<li><span class="why">$(T\times d_k)(d_k\times T)=T\times T$</span> $QK^\top\in\mathbb R^{T\times T}$, entry $(i,j)=q_i^\top k_j$; the row-wise softmax keeps this shape: $A\in\mathbb R^{T\times T}$.</li>
+<li><span class="why">$(T\times T)(T\times d_v)=T\times d_v$</span> $Z=AV\in\mathbb R^{T\times d_v}$ — $T$ tokens in, $T$ tokens out.</li>
+<li><span class="why">count multiply-adds</span> $QK^\top$ needs $T^2$ dot products of length $d_k$: $T^2d_k$; $AV$: $T^2d_v$; projections: $Td_M(2d_k+d_v)$. Total $\mathcal O(T^2d+Td_Md)$ — quadratic in $T$.</li>
+<li><span class="why">weights are shared across positions</span> Parameters of one head: $d_M(2d_k+d_v)$, independent of $T$ (the model processes any length up to the context window).</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>$d_M=512$, $d_k=d_v=64$: one head has $512\times(64+64+64)=98\,304$ parameters, whatever $T$ is. For $T=1000$: $T^2d_k=6.4\times10^7$ multiply-adds for $QK^\top$ and a $10^6$-entry weight matrix; for $T=2000$: $2.56\times10^8$ and $4\times10^6$ entries (4 times more). A sliding window of $w$ recent keys (with a KV cache) costs $T\,w\,d_k$ instead, linear in $T$, at the price of forgetting older context.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>$d_v$ is a <em>dimension</em> (width of the value vectors), not a weight matrix; $d_M$ (model width) is a separate hyperparameter.</li>
+<li>Vanilla attention is quadratic in context length; sliding-window / dilated / linearised attention are sub-quadratic variants (KV cache = stored past keys and values).</li>
+</ul></div>
+
+<!-- ============================================================ -->
+<h2 id="multihead" class="proof-head">7. Multi-head attention: dimension split and parameter count</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>With $H$ heads of width $d_k=d_M/H$, the concatenated head output has width $d_M$, the total projection parameters equal those of one full-width head ($3d_M^2$), and the extra parameters come only from the mixing matrix $W_C$ ($d_M^2$). (Oct 24 notes §4: the relation $d_k=d_M/H$ and the concatenation are in class; the parameter counting is filled in.) Used later in: the full Transformer block (proof 9 onward).</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 350" style="max-width:100%;height:auto" role="img" aria-label="Input fed to H heads, each with its own projections and attention, outputs concatenated and mixed by W_C">
+  <defs><marker id="p07g1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <rect x="150" y="28" width="460" height="34" rx="6" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="380" y="50" font-size="13.5" text-anchor="middle">X   (T × d_M)</text>
+  <g font-size="12.5" text-anchor="middle">
+    <rect x="40" y="110" width="150" height="62" rx="8" fill="var(--surface-2)" stroke="var(--s1)"/><text x="115" y="132" font-weight="700">head 1</text><text x="115" y="150" class="muted-t" font-size="11.5">own W_Q,W_K,W_V</text><text x="115" y="164" class="muted-t" font-size="11.5">A₁ is T×T</text>
+    <rect x="215" y="110" width="150" height="62" rx="8" fill="var(--surface-2)" stroke="var(--s2)"/><text x="290" y="132" font-weight="700">head 2</text><text x="290" y="150" class="muted-t" font-size="11.5">own W_Q,W_K,W_V</text><text x="290" y="164" class="muted-t" font-size="11.5">A₂ is T×T</text>
+    <rect x="395" y="110" width="150" height="62" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="470" y="132" font-weight="700">head 3</text><text x="470" y="150" class="muted-t" font-size="11.5">own W_Q,W_K,W_V</text><text x="470" y="164" class="muted-t" font-size="11.5">A₃ is T×T</text>
+    <rect x="570" y="110" width="150" height="62" rx="8" fill="var(--surface-2)" stroke="var(--s4)"/><text x="645" y="132" font-weight="700">head H</text><text x="645" y="150" class="muted-t" font-size="11.5">own W_Q,W_K,W_V</text><text x="645" y="164" class="muted-t" font-size="11.5">A_H is T×T</text>
+  </g>
+  <g stroke="var(--text-3)" stroke-width="1.4">
+    <line x1="300" y1="62" x2="130" y2="108" marker-end="url(#p07g1)"/><line x1="340" y1="62" x2="270" y2="108" marker-end="url(#p07g1)"/>
+    <line x1="420" y1="62" x2="480" y2="108" marker-end="url(#p07g1)"/><line x1="460" y1="62" x2="630" y2="108" marker-end="url(#p07g1)"/>
+  </g>
+  <text x="620" y="49" font-size="11.5" class="muted-t">per head: d_M → d_M/H</text>
+  <g stroke="var(--text-3)" stroke-width="1.4">
+    <line x1="115" y1="172" x2="170" y2="212" marker-end="url(#p07g1)"/><line x1="290" y1="172" x2="285" y2="212" marker-end="url(#p07g1)"/>
+    <line x1="470" y1="172" x2="470" y2="212" marker-end="url(#p07g1)"/><line x1="645" y1="172" x2="590" y2="212" marker-end="url(#p07g1)"/>
+  </g>
+  <g>
+    <rect x="150" y="214" width="115" height="26" fill="var(--s1)" opacity=".7"/><rect x="265" y="214" width="115" height="26" fill="var(--s2)" opacity=".7"/>
+    <rect x="380" y="214" width="115" height="26" fill="var(--s3)" opacity=".7"/><rect x="495" y="214" width="115" height="26" fill="var(--s4)" opacity=".7"/>
+  </g>
+  <text x="380" y="259" font-size="12.5" font-weight="700" text-anchor="middle">Concat(Z₁,…,Z_H)   (T × H·d_v = T × d_M)</text>
+  <line x1="380" y1="266" x2="380" y2="284" stroke="var(--text-3)" stroke-width="1.4" marker-end="url(#p07g1)"/>
+  <rect x="210" y="286" width="340" height="34" rx="8" fill="var(--accent-soft)" stroke="var(--s1)" stroke-width="2"/><text x="380" y="308" font-size="13" text-anchor="middle">× W_C  (d_M × d_M)  gives  Z  (T × d_M)</text>
+  <text x="380" y="342" text-anchor="middle" font-size="12" class="muted-t">each head can learn a different attention pattern (different A_j)</text>
+</svg>
+<figcaption class="small muted">Figure 7.1 — $H$ parallel heads, each of width $d_k=d_M/H$, are concatenated back to width $d_M$ and mixed by $W_C$ (called $W^O$ in the original paper).</figcaption>
+</figure>
+
+<ol class="steps">
+<li><span class="why">head $j$ (Oct 24 §4)</span> $Q_j=XW_Q^{(j)},\ K_j=XW_K^{(j)},\ V_j=XW_V^{(j)}$ with $W^{(j)}\in\mathbb R^{d_M\times d_k}$, $$Z_j=\operatorname{softmax}\!\Big(\frac{Q_jK_j^\top}{\sqrt{d_k}}\Big)V_j\in\mathbb R^{T\times d_k},\qquad d_k=d_v=\frac{d_M}{H}.$$</li>
+<li><span class="why">concatenate along the feature axis</span> $\operatorname{Concat}(Z_1,\ldots,Z_H)\in\mathbb R^{T\times Hd_v}=\mathbb R^{T\times d_M}$, because $H\cdot\dfrac{d_M}{H}=d_M$.</li>
+<li><span class="why">mix with $W_C\in\mathbb R^{d_M\times d_M}$</span> $Z=\operatorname{Concat}(Z_1,\ldots,Z_H)\,W_C\in\mathbb R^{T\times d_M}$: same shape as the input $X$, so the block can be stacked and wrapped in a residual connection (proof 9).</li>
+<li><span class="why">block matrix multiplication (step filled in)</span> Splitting $W_C$ into $H$ row-blocks $W_C^{(j)}\in\mathbb R^{d_v\times d_M}$: $$Z=\sum_{j=1}^{H}Z_j\,W_C^{(j)},$$ i.e. each head writes its own contribution into the shared $d_M$-dimensional output.</li>
+<li><span class="why">parameter count (step filled in)</span> Projections: $H$ heads $\times$ $3$ matrices $\times$ $d_Md_k$ $$=3H\,d_M\frac{d_M}{H}=3d_M^2,$$ exactly the count of a single head with $d_k=d_M$ ($3d_M\cdot d_M$). Adding $W_C$: $d_M^2$. Total $4d_M^2$ (ignoring biases).</li>
+<li><span class="why">compute count (step filled in)</span> Per head $T^2d_k$ for $QK^\top$; over $H$ heads $T^2Hd_k=T^2d_M$ — the same as one full-width head. Memory for weights is larger: $H$ matrices of size $T\times T$.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>$d_M=512$, $H=8$: $d_k=d_v=64$. Projections: $8\times3\times512\times64=786\,432=3\cdot512^2$. $W_C$: $512^2=262\,144$. Total $1\,048\,576=4\cdot512^2$. A single full-width head ($d_k=512$) has the same $786\,432$ projection parameters but only one attention pattern; 8 heads give 8 different $T\times T$ patterns for the same projection budget.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>$d_k=d_M/H$; heads run in parallel, outputs are concatenated and mixed by $W_C$ ($=W^O$); output width stays $d_M$. $H$ is a hyperparameter; all modern Transformers use multi-head attention.</li>
+<li>Professor's statement: multi-head has "more parameters than a single head because every head has its own projections and $W_C$ is added". Precisely: relative to <em>one full-width head</em> only the $W_C$ matrix is extra ($d_M^2$); relative to one small head of width $d_M/H$ there are $H$ times as many projections. (The class's worked example of the dimension split was garbled in the recording; only $d_k=d_M/H$ is certain.)</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Believing each head sees only a slice of the input. Each head has its own $d_M\to d_k$ projections applied to the <em>whole</em> input; it is the head <em>outputs</em> that are placed side by side.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="ffn" class="proof-head">8. Why attention needs a position-wise feed-forward layer</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>For fixed attention weights, attention is linear in the token vectors, so stacking attention layers alone adds no nonlinear capacity; the position-wise MLP $\hat z_j=\sigma(z_jW_1+b_1)W_2+b_2$ supplies the nonlinearity and acts on each token separately (so it preserves causality). (Oct 24 notes §5.1: the professor stressed this verbally; the short algebraic argument is filled in.) Used later in: the full block.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 290" style="max-width:100%;height:auto" role="img" aria-label="Attention mixes across positions; the feed-forward layer processes each position separately">
+  <defs><marker id="p07h1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <text x="380" y="18" text-anchor="middle" font-size="13" font-weight="700">Attention: mixes information ACROSS positions (linear in V)</text>
+  <g font-size="13" text-anchor="middle">
+    <rect x="120" y="30" width="70" height="30" rx="6" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="155" y="50">x₁</text>
+    <rect x="260" y="30" width="70" height="30" rx="6" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="295" y="50">x₂</text>
+    <rect x="400" y="30" width="70" height="30" rx="6" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="435" y="50">x₃</text>
+    <rect x="540" y="30" width="70" height="30" rx="6" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="575" y="50">x₄</text>
+    <rect x="120" y="120" width="70" height="30" rx="6" fill="var(--surface-2)" stroke="var(--s3)"/><text x="155" y="140">z₁</text>
+    <rect x="260" y="120" width="70" height="30" rx="6" fill="var(--surface-2)" stroke="var(--s3)"/><text x="295" y="140">z₂</text>
+    <rect x="400" y="120" width="70" height="30" rx="6" fill="var(--surface-2)" stroke="var(--s3)"/><text x="435" y="140">z₃</text>
+    <rect x="540" y="120" width="70" height="30" rx="6" fill="var(--surface-2)" stroke="var(--s3)"/><text x="575" y="140">z₄</text>
+  </g>
+  <g stroke="var(--text-3)" stroke-width="1" opacity=".8">
+    <line x1="155" y1="60" x2="155" y2="120"/><line x1="155" y1="60" x2="295" y2="120"/><line x1="155" y1="60" x2="435" y2="120"/><line x1="155" y1="60" x2="575" y2="120"/>
+    <line x1="295" y1="60" x2="155" y2="120"/><line x1="295" y1="60" x2="295" y2="120"/><line x1="295" y1="60" x2="435" y2="120"/><line x1="295" y1="60" x2="575" y2="120"/>
+    <line x1="435" y1="60" x2="155" y2="120"/><line x1="435" y1="60" x2="295" y2="120"/><line x1="435" y1="60" x2="435" y2="120"/><line x1="435" y1="60" x2="575" y2="120"/>
+    <line x1="575" y1="60" x2="155" y2="120"/><line x1="575" y1="60" x2="295" y2="120"/><line x1="575" y1="60" x2="435" y2="120"/><line x1="575" y1="60" x2="575" y2="120"/>
+  </g>
+  <text x="380" y="173" text-anchor="middle" font-size="13" font-weight="700">Feed-forward: the SAME MLP applied to each position separately (nonlinear)</text>
+  <g stroke="var(--text-3)" stroke-width="1.6">
+    <line x1="155" y1="150" x2="155" y2="160"/><line x1="295" y1="150" x2="295" y2="160"/><line x1="435" y1="150" x2="435" y2="160"/><line x1="575" y1="150" x2="575" y2="160"/>
+    <line x1="155" y1="180" x2="155" y2="200" marker-end="url(#p07h1)"/><line x1="295" y1="180" x2="295" y2="200" marker-end="url(#p07h1)"/>
+    <line x1="435" y1="180" x2="435" y2="200" marker-end="url(#p07h1)"/><line x1="575" y1="180" x2="575" y2="200" marker-end="url(#p07h1)"/>
+  </g>
+  <g font-size="12" text-anchor="middle">
+    <rect x="120" y="202" width="70" height="30" rx="6" fill="var(--surface-2)" stroke="var(--s2)"/><text x="155" y="222">MLP</text>
+    <rect x="260" y="202" width="70" height="30" rx="6" fill="var(--surface-2)" stroke="var(--s2)"/><text x="295" y="222">MLP</text>
+    <rect x="400" y="202" width="70" height="30" rx="6" fill="var(--surface-2)" stroke="var(--s2)"/><text x="435" y="222">MLP</text>
+    <rect x="540" y="202" width="70" height="30" rx="6" fill="var(--surface-2)" stroke="var(--s2)"/><text x="575" y="222">MLP</text>
+  </g>
+  <text x="380" y="262" text-anchor="middle" font-size="12" class="muted-t">row j of the output depends only on row j of the input: no mixing across positions, so causality is preserved</text>
+  <text x="380" y="280" text-anchor="middle" font-size="12" class="muted-t">shared W₁, b₁, W₂, b₂ for all positions</text>
+</svg>
+<figcaption class="small muted">Figure 8.1 — Attention is the "communication" step (all-to-all, linear in the values); the feed-forward layer is the "computation" step (per token, nonlinear).</figcaption>
+</figure>
+
+<ol class="steps">
+<li><span class="why">write attention with its weights frozen</span> $Z=AXW_V$ where $A=\operatorname{softmax}(\cdot)$ is the weight matrix. For fixed $A$ this is linear in $X$: $Z(aX+bY)=aZ(X)+bZ(Y)$.</li>
+<li><span class="why">composition of linear maps is linear</span> Two stacked attention layers with fixed weights $A,A'$: $$Z'=A'ZW_V'=A'A\,X\,W_VW_V'=(A'A)\,X\,(W_VW_V'),$$ again of the form "mix tokens, then project": no new capacity.</li>
+<li><span class="why">where nonlinearity enters attention</span> Only through $A$, a softmax of the bilinear form $XW_QW_K^\top X^\top$; and by proof 3 the output is always a convex combination of values.</li>
+<li><span class="why">position-wise MLP</span> $\hat z_j=\sigma(z_jW_1+b_1)W_2+b_2$ with the same $W_1,b_1,W_2,b_2$ for every $j$. A one-hidden-layer network with a nonlinear $\sigma$ is a universal approximator (the lecture's remark), so per token the block can now apply a rich nonlinear map.</li>
+<li><span class="why">no cross-token terms</span> $\hat z_j$ is a function of $z_j$ alone, so the layer neither mixes positions nor leaks future information.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Take $\sigma=\mathrm{ReLU}$ and a scalar token, $W_1=(1,-1)$, $b_1=0$, $W_2=(1,1)^\top$, $b_2=0$: $\hat z=\mathrm{ReLU}(z)+\mathrm{ReLU}(-z)=|z|$. Then $\hat z(2)=2$ and $\hat z(-2)=2$, but a linear map $z\mapsto cz$ would give $2c$ and $-2c$: the MLP computes a function no linear layer can.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>"Most of the learning capacity" of the Transformer sits in the fully connected layers: all attention projections are linear and the only nonlinearity is the softmax.</li>
+<li>The MLP is applied to <strong>each token separately</strong> with shared weights. The final linear layer maps to vocabulary size and the softmax there gives $p_\theta(x_t\mid x_{&lt;t})$.</li>
+</ul></div>
+
+<!-- ============================================================ -->
+<h2 id="residual" class="proof-head">9. Residual connections and the identity gradient path</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>A residual block $y=x+F(x)$ can represent the identity (set $F\approx0$) and has Jacobian $I+\partial F/\partial x$, so across $L$ blocks the gradient always contains an identity term and cannot vanish multiplicatively. (Oct 24 notes §6.1: the lecture gave the identity / skip argument; the Jacobian expansion is filled in.) Used later in: the full Transformer block, where it wraps both attention and the MLP.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 280" style="max-width:100%;height:auto" role="img" aria-label="Three blocks each with a skip connection forming an identity highway">
+  <defs>
+    <marker id="p07i1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker>
+    <marker id="p07i2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s3)"/></marker>
+  </defs>
+  <text x="380" y="20" text-anchor="middle" font-size="14" font-weight="700">y_l = y_(l-1) + F_l(y_(l-1))</text>
+  <g stroke="var(--s3)" stroke-width="3" fill="none">
+    <path d="M40,130 L40,70 L700,70" marker-end="url(#p07i2)"/>
+  </g>
+  <text x="370" y="58" text-anchor="middle" font-size="12.5" font-weight="700" style="fill:var(--s3)">identity highway: values and gradients travel here unchanged</text>
+  <line x1="40" y1="130" x2="120" y2="130" stroke="var(--text-3)" stroke-width="1.8"/>
+  <g font-size="13" text-anchor="middle">
+    <rect x="120" y="108" width="90" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s2)"/><text x="165" y="135">F₁</text>
+    <circle cx="260" cy="130" r="16" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="260" y="135">+</text>
+    <rect x="320" y="108" width="90" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s2)"/><text x="365" y="135">F₂</text>
+    <circle cx="460" cy="130" r="16" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="460" y="135">+</text>
+    <rect x="520" y="108" width="90" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s2)"/><text x="565" y="135">F₃</text>
+    <circle cx="660" cy="130" r="16" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="660" y="135">+</text>
+  </g>
+  <g stroke="var(--text-3)" stroke-width="1.8" fill="none">
+    <line x1="210" y1="130" x2="242" y2="130" marker-end="url(#p07i1)"/><line x1="276" y1="130" x2="318" y2="130" marker-end="url(#p07i1)"/>
+    <line x1="410" y1="130" x2="442" y2="130" marker-end="url(#p07i1)"/><line x1="476" y1="130" x2="518" y2="130" marker-end="url(#p07i1)"/>
+    <line x1="610" y1="130" x2="642" y2="130" marker-end="url(#p07i1)"/>
+  </g>
+  <g stroke="var(--s3)" stroke-width="2" fill="none">
+    <path d="M260,70 L260,112" marker-end="url(#p07i2)"/><path d="M460,70 L460,112" marker-end="url(#p07i2)"/><path d="M660,70 L660,112" marker-end="url(#p07i2)"/>
+  </g>
+  <text x="380" y="190" text-anchor="middle" font-size="13.5" font-weight="700">∂y_L/∂y₀ = (I + J_L) ··· (I + J₂)(I + J₁) = I + Σ J_l + Σ J_a J_b + ···</text>
+  <text x="380" y="214" text-anchor="middle" font-size="12" class="muted-t">the "I" term survives however small the J_l are; without skips the gradient is only J_L ··· J₁ (a product of small matrices)</text>
+  <text x="380" y="240" text-anchor="middle" font-size="12" class="muted-t">if F_l is not useful the network can drive F_l → 0 and the block is the identity (the architecture only makes this easy)</text>
+</svg>
+<figcaption class="small muted">Figure 9.1 — Every block adds its correction to a clean copy of its input; the green path is an uninterrupted route from output back to input.</figcaption>
+</figure>
+
+<ol class="steps">
+<li><span class="why">definition</span> $y=x+F(x)$ with $F$ the functional block (attention or MLP) and the sum applied element-wise.</li>
+<li><span class="why">if the block is useless, switch it off</span> If $F(x)\approx0$ (for example through the next layer's weights) then $y\approx x$: the block is the identity. Plain stacked layers would have to <em>learn</em> the identity map, which is hard; here it is the default. The architecture does not decide this; it only <strong>makes it easy</strong> to skip a block.</li>
+<li><span class="why">differentiate</span> The Jacobian is $$\frac{\partial y}{\partial x}=I+\frac{\partial F}{\partial x}=I+J.$$</li>
+<li><span class="why">chain rule through $L$ blocks (step filled in)</span> With $y_l=y_{l-1}+F_l(y_{l-1})$ and $J_l=\partial F_l/\partial y_{l-1}$: $$\frac{\partial y_L}{\partial y_0}=\prod_{l=L}^{1}(I+J_l).$$</li>
+<li><span class="why">expand the product</span> $$\prod_{l}(I+J_l)=I+\sum_lJ_l+\sum_{a&gt;b}J_aJ_b+\cdots$$ The identity term is there for every $L$.</li>
+<li><span class="why">compare with no skips</span> Without skips $\partial y_L/\partial y_0=J_L\cdots J_1$, bounded by $c^L$ when $\|J_l\|\le c&lt;1$ (as in proof 2). With skips the gradient reaching layer 0 is $\frac{\partial\mathcal L}{\partial y_L}\big(I+\cdots\big)$, which always contains the direct term $\frac{\partial\mathcal L}{\partial y_L}$.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Scalar blocks with $J_l=0.1$ and $L=10$. Without skips: $0.1^{10}=10^{-10}$ (dead gradient). With skips: $(1+0.1)^{10}=2.59$. Even with $J_l=0$ (completely useless blocks) the gradient is exactly $1$ and the output equals the input.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>$y=x+F(x)$; idea from ResNet. Motivation (lecture): deeper networks are not always better and can be worse; a residual makes it easy for the network to ignore a block.</li>
+<li>Correction to the lecture: ResNet is from Microsoft Research (He et al., 2015), not Google.</li>
+<li>In the Transformer each sub-layer (masked attention, MLP) output goes through <strong>residual + layer norm</strong>.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Thinking the network "decides" at run time to skip a block. It is not an explicit decision; training simply has an easy solution (small $F$) available.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="layernorm" class="proof-head">10. Layer normalisation</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>$\operatorname{LN}(x)=\gamma\odot\dfrac{x-\mu}{\sqrt{\sigma^2+\epsilon}}+\beta$ with $\mu,\sigma^2$ computed across the $d_M$ features of one token: the normalised vector has mean $0$ and variance $\approx1$, and the learnable $(\gamma,\beta)$ can undo the normalisation exactly. (Oct 24 notes §6.2. The lecture stated the benefits only intuitively; the algebra below is a short correct verification, not a lecture proof.) Used later in: both sub-layers of the Transformer block.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 240" style="max-width:100%;height:auto" role="img" aria-label="Four feature values before normalisation with mean 5 and after normalisation centred at 0 with unit variance">
+  <text x="380" y="20" text-anchor="middle" font-size="13.5" font-weight="700">One token, d_M = 4 features</text>
+  <line x1="90" y1="70" x2="670" y2="70" stroke="var(--text-3)"/>
+  <g font-size="12" text-anchor="middle">
+    <circle cx="190" cy="70" r="8" fill="var(--s2)"/><circle cx="290" cy="70" r="8" fill="var(--s2)"/><circle cx="390" cy="70" r="8" fill="var(--s2)"/><circle cx="490" cy="70" r="8" fill="var(--s2)"/>
+    <text x="190" y="54">2</text><text x="290" y="54">4</text><text x="390" y="54">6</text><text x="490" y="54">8</text>
+    <line x1="340" y1="56" x2="340" y2="90" stroke="var(--s3)" stroke-dasharray="4 3" stroke-width="2"/><text x="340" y="106" style="fill:var(--s3)" font-weight="700">mean μ = 5</text>
+  </g>
+  <text x="640" y="56" font-size="12" class="muted-t" text-anchor="end">before: σ² = 5</text>
+  <path d="M380,118 L380,150" stroke="var(--text-3)" stroke-width="1.8" marker-end="url(#p07j1)"/>
+  <defs><marker id="p07j1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <text x="392" y="138" font-size="12" class="muted-t">subtract μ, divide by √(σ²+ε)</text>
+  <line x1="90" y1="190" x2="670" y2="190" stroke="var(--text-3)"/>
+  <g font-size="12" text-anchor="middle">
+    <circle cx="313" cy="190" r="8" fill="var(--s1)"/><circle cx="358" cy="190" r="8" fill="var(--s1)"/><circle cx="402" cy="190" r="8" fill="var(--s1)"/><circle cx="447" cy="190" r="8" fill="var(--s1)"/>
+    <text x="313" y="174">-1.34</text><text x="358" y="174">-0.45</text><text x="402" y="174">0.45</text><text x="447" y="174">1.34</text>
+    <line x1="380" y1="176" x2="380" y2="204" stroke="var(--s3)" stroke-dasharray="4 3" stroke-width="2"/><text x="380" y="222" style="fill:var(--s3)" font-weight="700">mean 0, variance 1</text>
+  </g>
+  <text x="640" y="176" font-size="12" class="muted-t" text-anchor="end">after: scale restored by γ, β</text>
+</svg>
+<figcaption class="small muted">Figure 10.1 — Layer norm re-centres and re-scales each token's feature vector (axis = features of that token); $\gamma,\beta$ then give the network back the freedom to choose scale and shift.</figcaption>
+</figure>
+
+<ol class="steps">
+<li><span class="why">statistics over the feature axis of one token</span> $$\mu=\frac1{d_M}\sum_{i=1}^{d_M}x_i,\qquad\sigma^2=\frac1{d_M}\sum_{i=1}^{d_M}(x_i-\mu)^2.$$</li>
+<li><span class="why">normalise</span> $\hat x_i=\dfrac{x_i-\mu}{\sqrt{\sigma^2+\epsilon}}$ ($\epsilon$ avoids division by zero). Note: divide by the standard deviation, not the variance.</li>
+<li><span class="why">linearity of the mean</span> $$\frac1{d_M}\sum_i\hat x_i=\frac{\mu-\mu}{\sqrt{\sigma^2+\epsilon}}=0.$$</li>
+<li><span class="why">definition of $\sigma^2$</span> $$\frac1{d_M}\sum_i\hat x_i^{\,2}=\frac{\sigma^2}{\sigma^2+\epsilon}\xrightarrow[\epsilon\to0]{}1.$$</li>
+<li><span class="why">learnable scale and shift</span> $\operatorname{LN}(x)_i=\gamma_i\hat x_i+\beta_i$.</li>
+<li><span class="why">it can be undone</span> Choose $\gamma_i=\sqrt{\sigma^2+\epsilon}$ ($\approx\sigma$) and $\beta_i=\mu$: $$\operatorname{LN}(x)_i=\sqrt{\sigma^2+\epsilon}\cdot\frac{x_i-\mu}{\sqrt{\sigma^2+\epsilon}}+\mu=x_i.$$ With $\gamma=1,\beta=0$ the plain normalisation is kept.</li>
+<li><span class="why">extra property (not in class): invariance to scale and shift of the input</span> For $a&gt;0$ and $\epsilon\to0$: $x'=ax+b\mathbf 1\Rightarrow\mu'=a\mu+b,\ \sigma'=a\sigma$, so $\hat x'_i=\dfrac{a(x_i-\mu)}{a\sigma}=\hat x_i$.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>$x=(2,4,6,8)$: $\mu=5$, $\sigma^2=\frac{9+1+1+9}{4}=5$, $\sigma=2.236$. $\hat x=(-3,-1,1,3)/2.236=(-1.342,-0.447,0.447,1.342)$ (with $\epsilon=10^{-5}$, negligible). Mean $0$; variance $\frac{1.8+0.2+0.2+1.8}{4}=1$. Undo test: $\gamma=2.236,\beta=5$ gives back $(2,4,6,8)$.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Layer norm normalises <strong>across the features of each token</strong>; batch norm normalises across the batch for each feature.</li>
+<li>Correction to the lecture: it said "divide by the variance" and called the pair "mu and beta"; the standard form divides by $\sqrt{\sigma^2+\epsilon}$ and the learnable pair is $(\gamma,\beta)$.</li>
+<li>Why it helps was given as intuition only (not proved): like whitening / z-scoring and a regulariser so capacity is not wasted adapting to feature scales; since $\gamma,\beta$ can undo it, nothing is lost.</li>
+</ul></div>
+
+<!-- ============================================================ -->
+<h2 id="posenc" class="proof-head">11. Positional encoding: why it is needed and the shift property</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>(a) Without positional information, self-attention is permutation-equivariant, so word order is invisible. (b) The sinusoidal encoding $\mathrm{PE}(pos,2i)=\sin(\omega_i\,pos)$, $\mathrm{PE}(pos,2i+1)=\cos(\omega_i\,pos)$ is rotated by a position-independent matrix when the position shifts by $k$. (Oct 24 notes §7 gave the need and the formula; Oct 17 §10.2 raised the order-blindness of naive models. Both derivations here are filled in.) Used later in: the first step of the block; the same idea encodes the diffusion time variable.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 300" style="max-width:100%;height:auto" role="img" aria-label="Positions on a circle: shifting the position rotates the encoding">
+  <defs><marker id="p07k1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s3)"/></marker></defs>
+  <text x="190" y="18" text-anchor="middle" font-size="13.5" font-weight="700">One (sin, cos) pair, ω = 1</text>
+  <circle cx="190" cy="150" r="100" fill="var(--accent-soft)" stroke="var(--s1)"/>
+  <line x1="190" y1="40" x2="190" y2="260" stroke="var(--text-3)" stroke-width=".8"/><line x1="80" y1="150" x2="300" y2="150" stroke="var(--text-3)" stroke-width=".8"/>
+  <text x="304" y="154" font-size="11.5" class="muted-t">sin</text><text x="196" y="38" font-size="11.5" class="muted-t">cos</text>
+  <g font-size="12" font-weight="700" text-anchor="middle">
+    <circle cx="190" cy="50" r="6" fill="var(--s2)"/><text x="170" y="48">p=0</text>
+    <circle cx="274.2" cy="96" r="7" fill="var(--s1)"/><text x="300" y="92">p=1</text>
+    <circle cx="280.9" cy="191.6" r="6" fill="var(--s2)"/><text x="306" y="204">p=2</text>
+    <circle cx="204.1" cy="249" r="6" fill="var(--s2)"/><text x="228" y="266">p=3</text>
+    <circle cx="114.3" cy="215.4" r="7" fill="var(--s1)"/><text x="88" y="232">p=4</text>
+  </g>
+  <path d="M242,116 A 62 62 0 0 1 143,190" fill="none" stroke="var(--s3)" stroke-width="2.2" marker-end="url(#p07k1)"/>
+  <text x="190" y="156" text-anchor="middle" font-size="12" style="fill:var(--s3)" font-weight="700">rotate by ωk</text>
+  <text x="190" y="172" text-anchor="middle" font-size="11.5" class="muted-t">(k = 3 here)</text>
+  <g font-size="13" text-anchor="start">
+    <text x="420" y="50" font-weight="700">PE(p+k) pair = R(ωk) · PE(p) pair</text>
+    <text x="420" y="84">R(ωk) = [  cos ωk   sin ωk ]</text>
+    <text x="474" y="104">[ −sin ωk   cos ωk ]</text>
+    <text x="420" y="140" class="muted-t" font-size="12">R depends on the offset k only, not on the position p</text>
+    <text x="420" y="160" class="muted-t" font-size="12">and it is a linear map: so "k steps ahead" is a matrix</text>
+    <text x="420" y="180" class="muted-t" font-size="12">the network can learn (relative position).</text>
+    <text x="420" y="212" font-weight="700">PE(p) · PE(p+k) = Σ_i cos(ω_i k)</text>
+    <text x="420" y="232" class="muted-t" font-size="12">similarity of two positions depends only on their distance k</text>
+    <text x="420" y="262" class="muted-t" font-size="12">low i: fast rotation (fine); high i: slow (coarse)</text>
+  </g>
+</svg>
+<figcaption class="small muted">Figure 11.1 — Each (sin, cos) pair places position $p$ on a circle at angle $\omega p$. Moving from $p=1$ to $p=4$ rotates the point by $3\omega$ whatever $p$ was; many frequencies $\omega_i$ together identify the position.</figcaption>
+</figure>
+
+<h3>(a) Why position must be injected <span class="why">step filled in — not written out in class</span></h3>
+<ol class="steps">
+<li><span class="why">permute the tokens</span> Let $P$ be a permutation matrix and feed $X'=PX$. Position-wise projections give $$Q'=PXW_Q=PQ,\qquad K'=PK,\qquad V'=PV.$$</li>
+<li><span class="why">$(PQ)(PK)^\top=PQK^\top P^\top$</span> Scores become $S'=PSP^\top$: the same scores with rows and columns relabelled.</li>
+<li><span class="why">row-wise softmax commutes with relabelling</span> $\operatorname{softmax}(PSP^\top)=P\operatorname{softmax}(S)P^\top$, i.e. $A'=PAP^\top$.</li>
+<li><span class="why">$P^\top P=I$</span> $$Z'=A'V'=PAP^\top PV=PAV=PZ.$$ Shuffling the input only shuffles the output in the same way: the layer cannot tell "dog bites man" from "man bites dog". The MLP, residual and layer norm are position-wise, so they do not help either. Hence order must be added to the input.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<h3>(b) The shift property of the sinusoidal encoding <span class="why">step filled in — not written out in class</span></h3>
+<ol class="steps">
+<li><span class="why">define the frequencies</span> $\omega_i=10000^{-2i/d_M}$, so the pair for dimensions $(2i,2i+1)$ is $\big(\sin\omega_ip,\ \cos\omega_ip\big)$.</li>
+<li><span class="why">angle-addition formulas</span> $$\sin(\omega p+\omega k)=\sin\omega p\cos\omega k+\cos\omega p\sin\omega k,$$ $$\cos(\omega p+\omega k)=-\sin\omega p\,\sin\omega k+\cos\omega p\cos\omega k.$$</li>
+<li><span class="why">write as a matrix times the old pair</span> $$\begin{pmatrix}\sin\omega(p+k)\\\cos\omega(p+k)\end{pmatrix}=\begin{pmatrix}\cos\omega k&amp;\sin\omega k\\-\sin\omega k&amp;\cos\omega k\end{pmatrix}\begin{pmatrix}\sin\omega p\\\cos\omega p\end{pmatrix}.$$ The $2\times2$ matrix is a rotation by $\omega k$ and contains no $p$.</li>
+<li><span class="why">stack the $d_M/2$ pairs</span> $\mathrm{PE}(p+k)=R_k\,\mathrm{PE}(p)$ with $R_k=\operatorname{blockdiag}\big(R(\omega_0k),\ldots,R(\omega_{d_M/2-1}k)\big)$: a fixed linear map for each offset $k$.</li>
+<li><span class="why">dot product of two positions (extra)</span> Per pair $\sin a\sin b+\cos a\cos b=\cos(a-b)$, so $$\mathrm{PE}(p)\cdot\mathrm{PE}(p+k)=\sum_{i=0}^{d_M/2-1}\cos(\omega_ik),$$ which depends only on $k$.</li>
+<li><span class="why">added to the embedding (Oct 24 §7)</span> The input to the first block is $x_t=\text{embed}(\text{token}_t)+\mathrm{PE}(t)$. The professor's reason for adding a $d_M$-dimensional vector rather than one extra scalar: a single appended coordinate in a high-dimensional vector tends to be ignored by the network.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>$d_M=4$: $\omega_0=1,\ \omega_1=10000^{-2/4}=0.01$. $\mathrm{PE}(1)=(\sin1,\cos1,\sin0.01,\cos0.01)=(0.8415,0.5403,0.0100,1.0000)$; $\mathrm{PE}(2)=(0.9093,-0.4161,0.0200,0.9998)$; $\mathrm{PE}(3)=(0.1411,-0.9900,0.0300,0.9996)$. Shift check for the first pair, $p=1,k=3,\omega=1$: $R(3)\,(0.8415,0.5403)^\top=(\cos3\cdot0.8415+\sin3\cdot0.5403,\ -\sin3\cdot0.8415+\cos3\cdot0.5403)=(-0.7568,-0.6536)=(\sin4,\cos4)$. Dot-product check: $\mathrm{PE}(0)\cdot\mathrm{PE}(3)=(0,1,0,1)\cdot(0.1411,-0.99,0.03,0.9996)=0.0096=\cos3+\cos0.03$.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Nothing else in the block (attention, MLP, norm, skip) knows the position. Sinusoids of many frequencies, even dimensions sine and odd cosine, are <strong>added</strong> to the token embeddings.</li>
+<li>Formula (shown on a slide): $\mathrm{PE}(pos,2i)=\sin\!\big(pos/10000^{2i/d_M}\big)$, $\mathrm{PE}(pos,2i+1)=\cos\!\big(pos/10000^{2i/d_M}\big)$.</li>
+<li>The rotation-matrix property is the textbook justification; in class only the formula and the motivation were given.</li>
+</ul></div>
+
+<!-- ============================================================ -->
+<h2 id="tf" class="proof-head">12. Maximum likelihood = sum of cross-entropies (teacher forcing)</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>Maximising the likelihood of the data under an autoregressive model is the same as minimising the sum over positions of the categorical cross-entropy between one-hot next-token targets and the predicted next-token distributions; with the causal mask all positions are computed in one parallel pass on the input shifted by one token (teacher forcing). (Oct 17 notes §9.3: log-likelihood and the link to KL; Oct 24 §9: loss and teacher forcing. Intermediate algebra filled in.) Used later in: pre-training and SFT of LLMs (same loss).</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 330" style="max-width:100%;height:auto" role="img" aria-label="Input sequence and shifted target sequence, one masked forward pass, per-position cross-entropy summed">
+  <defs><marker id="p07l1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <text x="70" y="42" font-size="12.5" font-weight="700" text-anchor="middle">input</text>
+  <g font-size="13" text-anchor="middle">
+    <rect x="170" y="24" width="90" height="28" rx="6" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="215" y="43">x₁</text>
+    <rect x="320" y="24" width="90" height="28" rx="6" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="365" y="43">x₂</text>
+    <rect x="470" y="24" width="90" height="28" rx="6" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="515" y="43">x₃</text>
+  </g>
+  <rect x="150" y="84" width="430" height="54" rx="10" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="2"/>
+  <text x="365" y="108" text-anchor="middle" font-size="13.5" font-weight="700">Transformer with causal mask — ONE forward pass</text>
+  <text x="365" y="126" text-anchor="middle" font-size="11.5" class="muted-t">position i sees x₁…x_i only</text>
+  <g stroke="var(--text-3)" stroke-width="1.6">
+    <line x1="215" y1="52" x2="215" y2="82" marker-end="url(#p07l1)"/><line x1="365" y1="52" x2="365" y2="82" marker-end="url(#p07l1)"/><line x1="515" y1="52" x2="515" y2="82" marker-end="url(#p07l1)"/>
+    <line x1="215" y1="138" x2="215" y2="166" marker-end="url(#p07l1)"/><line x1="365" y1="138" x2="365" y2="166" marker-end="url(#p07l1)"/><line x1="515" y1="138" x2="515" y2="166" marker-end="url(#p07l1)"/>
+  </g>
+  <text x="70" y="188" font-size="12.5" font-weight="700" text-anchor="middle">prediction</text>
+  <g font-size="12" text-anchor="middle">
+    <rect x="150" y="168" width="130" height="30" rx="6" fill="var(--surface-2)" stroke="var(--s3)"/><text x="215" y="188">p(· | x₁)</text>
+    <rect x="300" y="168" width="130" height="30" rx="6" fill="var(--surface-2)" stroke="var(--s3)"/><text x="365" y="188">p(· | x₁,x₂)</text>
+    <rect x="450" y="168" width="130" height="30" rx="6" fill="var(--surface-2)" stroke="var(--s3)"/><text x="515" y="188">p(· | x₁,x₂,x₃)</text>
+  </g>
+  <text x="70" y="258" font-size="12.5" font-weight="700" text-anchor="middle">target (shifted)</text>
+  <g font-size="13" text-anchor="middle">
+    <rect x="170" y="240" width="90" height="28" rx="6" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="215" y="259">x₂</text>
+    <rect x="320" y="240" width="90" height="28" rx="6" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="365" y="259">x₃</text>
+    <rect x="470" y="240" width="90" height="28" rx="6" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="515" y="259">x₄</text>
+  </g>
+  <g stroke="var(--s2)" stroke-width="1.8" stroke-dasharray="4 3">
+    <line x1="215" y1="198" x2="215" y2="238"/><line x1="365" y1="198" x2="365" y2="238"/><line x1="515" y1="198" x2="515" y2="238"/>
+  </g>
+  <g font-size="11.5" text-anchor="start" style="fill:var(--s2)">
+    <text x="222" y="224">−log p(x₂|x₁)</text><text x="372" y="224">−log p(x₃|x₁,x₂)</text><text x="522" y="224">−log p(x₄|x₁,x₂,x₃)</text>
+  </g>
+  <rect x="610" y="150" width="130" height="64" rx="8" fill="var(--accent-soft)" stroke="var(--s1)" stroke-width="2"/>
+  <text x="675" y="176" text-anchor="middle" font-size="13" font-weight="700">L = sum of</text><text x="675" y="194" text-anchor="middle" font-size="13" font-weight="700">the 3 terms</text>
+  <text x="380" y="304" text-anchor="middle" font-size="12" class="muted-t">no external labels: the targets are the input itself, shifted by one position; the true past is always fed in ("teacher forcing")</text>
+  <text x="380" y="322" text-anchor="middle" font-size="12" class="muted-t">training: T−1 conditionals in ONE pass (thanks to the causal mask)</text>
+</svg>
+<figcaption class="small muted">Figure 12.1 — Teacher forcing: input $x_1,\ldots,x_{T-1}$, target $x_2,\ldots,x_T$. Each position gets its own cross-entropy term and the terms are summed.</figcaption>
+</figure>
+
+<h3>From likelihood to cross-entropy</h3>
+<ol class="steps">
+<li><span class="why">maximum likelihood on $N$ i.i.d. sequences</span> $$\theta^\star=\arg\max_\theta\prod_{n=1}^{N}p_\theta\big(x^{(n)}\big)=\arg\max_\theta\sum_{n=1}^{N}\log p_\theta\big(x^{(n)}\big)\qquad(\log\text{ is monotone}).$$</li>
+<li><span class="why">autoregressive factorisation (proof 1)</span> $$\log p_\theta(x)=\sum_{t=1}^{T}\log p_\theta(x_t\mid x_{&lt;t}).$$</li>
+<li><span class="why">maximise = minimise the negative</span> The negative log-likelihood of one sequence is $$\mathcal L(\theta)=-\sum_{t}\log p_\theta(x_t\mid x_{&lt;t}),$$ summed over the dataset in practice (the lecture's loss).</li>
+<li><span class="why">one-hot target</span> At position $t$ let $y^{(t)}\in\{0,1\}^{V}$ be the one-hot vector of the true token ($y^{(t)}_v=1$ iff $v=x_t$) and $p^{(t)}=p_\theta(\cdot\mid x_{&lt;t})$ the model's softmax output over the vocabulary of size $V$. The categorical cross-entropy is $$H\big(y^{(t)},p^{(t)}\big)=-\sum_{v=1}^{V}y^{(t)}_v\log p^{(t)}_v=-\log p^{(t)}_{x_t},$$ because all terms except $v=x_t$ vanish.</li>
+<li><span class="why">identify</span> $$\mathcal L(\theta)=\sum_{t}H\big(y^{(t)},p^{(t)}\big):$$ the NLL of an autoregressive model is the sum of per-token cross-entropies.</li>
+<li><span class="why">link to KL (lecture: "minimising a divergence such as KL")</span> $$\mathrm{KL}(p_{\text{data}}\,\|\,p_\theta)=\mathbb E_{p_{\text{data}}}[\log p_{\text{data}}]-\mathbb E_{p_{\text{data}}}[\log p_\theta].$$ The first term does not depend on $\theta$, so minimising KL = maximising $\mathbb E_{p_{\text{data}}}\log p_\theta$, estimated by the sample average of step 1 (step filled in).</li>
+<li><span class="why">gradient of the loss at the logits (extra)</span> With $p=\operatorname{softmax}(z)$ and a one-hot $y$ at index $c$: $\ell=-z_c+\log\sum_ve^{z_v}$, so $$\frac{\partial\ell}{\partial z_v}=-\delta_{vc}+p_v=p_v-y_v.$$ The error signal is simply "predicted minus target".</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<h3>Teacher forcing and parallel training</h3>
+<ol class="steps">
+<li><span class="why">shift by one</span> Input $(x_1,\ldots,x_{T-1})$, target $(x_2,\ldots,x_T)$. No external supervision is needed: the targets come from the data itself. (The very first factor $p(x_1)$ needs a start-of-sequence token; the lecture's loss runs over the shifted positions.)</li>
+<li><span class="why">the context for every factor is the <em>true</em> past, known at training time</span> To evaluate $p_\theta(x_t\mid x_{&lt;t})$ for every $t$ we do not have to generate anything; the whole sequence is already available ("the teacher forces the correct past").</li>
+<li><span class="why">causal mask (proof 5)</span> Position $i$ of the output depends only on $x_{\le i}$, so the single forward pass computes <em>all</em> $T-1$ conditionals at once and none of them sees its own target.</li>
+<li><span class="why">ordinary empirical risk minimisation</span> Sum the cross-entropies and backpropagate: standard gradient descent on $\theta$ (lecture homework: derive the gradients of the loss with respect to $W_Q,W_K,W_V$ by hand — easy because the projections are linear).</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Three predictions with the true tokens given probabilities $0.5,\ 0.25,\ 0.5$. Cross-entropies: $-\ln0.5=0.693$, $-\ln0.25=1.386$, $-\ln0.5=0.693$; $\mathcal L=2.773$. Check via the joint: $0.5\cdot0.25\cdot0.5=1/16$ and $-\ln(1/16)=\ln16=2.773$. Gradient at the logits for the second position (vocabulary of 4, true token index 2): $p-y$ has entry $0.25-1=-0.75$ at the true token and positive entries on the others summing to $+0.75$ (gradients sum to zero).</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Loss $\mathcal L(\theta)=-\sum_t\log p_\theta(x_t\mid x_{&lt;t})$ = categorical cross-entropy; pre-training uses it on unlabelled text (targets = shifted input); SFT uses the same loss on $(x,y)$ pairs where the target tokens are the response $y$.</li>
+<li>Teacher forcing: target = input shifted by one token, no external supervision; maximum likelihood is linked to minimising KL between data and model.</li>
+<li>It is gradient <em>descent</em> on the loss (ascent on the log-likelihood).</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Treating the one-hot cross-entropy as a different loss from the NLL. They are identical: the one-hot target kills every term except $-\log p(x_t\mid x_{&lt;t})$.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="decode" class="proof-head">13. Inference: sequential decoding and temperature</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>Generation applies the chain rule in reverse (one token per forward pass, each conditioned on what has been generated, proof 1). Temperature rescaling $\operatorname{softmax}(z/\tau)$ sharpens the distribution for $\tau&lt;1$ (greedy as $\tau\to0$) and flattens it for $\tau&gt;1$ (uniform as $\tau\to\infty$); top-$K$ and top-$P$ truncate and renormalise. (Oct 24 notes §10 gave the list of rules; the limits below are filled in.) Used later in: using LLMs after training.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 270" style="max-width:100%;height:auto" role="img" aria-label="Softmax over three logits at three temperatures">
+  <text x="110" y="20" text-anchor="middle" font-size="13" font-weight="700">T = 0.5 (sharper)</text>
+  <line x1="20" y1="200" x2="200" y2="200" stroke="var(--text-3)"/>
+  <rect x="30" y="70.0" width="38" height="130.0" fill="var(--s1)"/>
+  <text x="49" y="65.0" text-anchor="middle" font-size="12" font-weight="700">0.87</text>
+  <text x="49" y="216" text-anchor="middle" font-size="12">a</text>
+  <rect x="85" y="182.4" width="38" height="17.6" fill="var(--s2)"/>
+  <text x="104" y="177.4" text-anchor="middle" font-size="12" font-weight="700">0.12</text>
+  <text x="104" y="216" text-anchor="middle" font-size="12">b</text>
+  <rect x="140" y="197.6" width="38" height="2.4" fill="var(--s3)"/>
+  <text x="159" y="192.6" text-anchor="middle" font-size="12" font-weight="700">0.02</text>
+  <text x="159" y="216" text-anchor="middle" font-size="12">c</text>
+<text x="360" y="20" text-anchor="middle" font-size="13" font-weight="700">T = 1 (model)</text>
+  <line x1="270" y1="200" x2="450" y2="200" stroke="var(--text-3)"/>
+  <rect x="280" y="100.2" width="38" height="99.8" fill="var(--s1)"/>
+  <text x="299" y="95.2" text-anchor="middle" font-size="12" font-weight="700">0.67</text>
+  <text x="299" y="216" text-anchor="middle" font-size="12">a</text>
+  <rect x="335" y="163.3" width="38" height="36.7" fill="var(--s2)"/>
+  <text x="354" y="158.3" text-anchor="middle" font-size="12" font-weight="700">0.24</text>
+  <text x="354" y="216" text-anchor="middle" font-size="12">b</text>
+  <rect x="390" y="186.5" width="38" height="13.5" fill="var(--s3)"/>
+  <text x="409" y="181.5" text-anchor="middle" font-size="12" font-weight="700">0.09</text>
+  <text x="409" y="216" text-anchor="middle" font-size="12">c</text>
+<text x="610" y="20" text-anchor="middle" font-size="13" font-weight="700">T = 2 (flatter)</text>
+  <line x1="520" y1="200" x2="700" y2="200" stroke="var(--text-3)"/>
+  <rect x="530" y="124.0" width="38" height="76.0" fill="var(--s1)"/>
+  <text x="549" y="119.0" text-anchor="middle" font-size="12" font-weight="700">0.51</text>
+  <text x="549" y="216" text-anchor="middle" font-size="12">a</text>
+  <rect x="585" y="153.9" width="38" height="46.1" fill="var(--s2)"/>
+  <text x="604" y="148.9" text-anchor="middle" font-size="12" font-weight="700">0.31</text>
+  <text x="604" y="216" text-anchor="middle" font-size="12">b</text>
+  <rect x="640" y="172.1" width="38" height="27.9" fill="var(--s3)"/>
+  <text x="659" y="167.1" text-anchor="middle" font-size="12" font-weight="700">0.19</text>
+  <text x="659" y="216" text-anchor="middle" font-size="12">c</text>
+  <text x="380" y="240" text-anchor="middle" font-size="12.5" class="muted-t">same logits (2, 1, 0) for tokens a, b, c; probabilities = softmax(logits / T)</text>
+  <text x="380" y="258" text-anchor="middle" font-size="12" class="muted-t">T to 0: greedy (all mass on a); T to infinity: uniform 1/3 each</text>
+</svg>
+<figcaption class="small muted">Figure 13.1 — The same three logits at three temperatures. Lower $\tau$ concentrates mass on the top token; higher $\tau$ spreads it.</figcaption>
+</figure>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 150" style="max-width:100%;height:auto" role="img" aria-label="Autoregressive generation loop: context, model, distribution, pick token, append, repeat">
+  <defs><marker id="p07m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <g font-size="12.5" text-anchor="middle">
+    <rect x="20" y="40" width="130" height="44" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="85" y="66">context x₁…x_(t−1)</text>
+    <rect x="190" y="40" width="130" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s2)"/><text x="255" y="66">Transformer pass</text>
+    <rect x="360" y="40" width="150" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="435" y="62">p(x_t | x_&lt;t)</text><text x="435" y="77" class="muted-t" font-size="11">softmax(z / τ)</text>
+    <rect x="550" y="40" width="190" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s4)"/><text x="645" y="62">pick x_t: argmax / sample /</text><text x="645" y="77">top-K / top-P</text>
+  </g>
+  <g stroke="var(--text-3)" stroke-width="1.6" fill="none">
+    <line x1="150" y1="62" x2="188" y2="62" marker-end="url(#p07m1)"/><line x1="320" y1="62" x2="358" y2="62" marker-end="url(#p07m1)"/><line x1="510" y1="62" x2="548" y2="62" marker-end="url(#p07m1)"/>
+    <path d="M645,84 L645,118 L85,118 L85,86" marker-end="url(#p07m1)"/>
+  </g>
+  <text x="365" y="112" text-anchor="middle" font-size="12" class="muted-t">append x_t to the context and repeat until the end-of-sequence token</text>
+  <text x="365" y="142" text-anchor="middle" font-size="12" class="muted-t">T tokens need T sequential passes: x_t is unknown until it is chosen, so the loop cannot be parallelised</text>
+</svg>
+<figcaption class="small muted">Figure 13.2 — Inference is sequential, unlike training (proof 12).</figcaption>
+</figure>
+
+<h3>Why inference is sequential and exact</h3>
+<ol class="steps">
+<li><span class="why">chain rule (proof 1)</span> $p_\theta(x)=\prod_tp_\theta(x_t\mid x_{&lt;t})$, so ancestral sampling of $x_t$ from $p_\theta(\cdot\mid x_{&lt;t})$ for $t=1,2,\ldots$ draws exact samples of the joint.</li>
+<li><span class="why">$x_t$ must be known before computing step $t+1$</span> The context of factor $t+1$ contains the token just generated, so passes cannot run in parallel: $T$ tokens cost $T$ passes. (Storing past keys and values, the "KV cache", avoids recomputing them; sliding-window attention discards old ones.)</li>
+<li><span class="why">stop</span> Generation ends when the end-of-sequence token is produced.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<h3>Temperature <span class="why">step filled in — not written out in class</span></h3>
+<ol class="steps">
+<li><span class="why">definition (lecture: divide the logits by $\tau$ before the softmax)</span> $$p_v^{(\tau)}=\frac{e^{z_v/\tau}}{\sum_{u}e^{z_u/\tau}}.$$ $\tau=1$ is the model's own distribution.</li>
+<li><span class="why">ranking is preserved, log-ratios scaled</span> $$\frac{p_u^{(\tau)}}{p_v^{(\tau)}}=\exp\!\Big(\frac{z_u-z_v}{\tau}\Big):$$ the order of tokens never changes, but small $\tau$ stretches the gaps and large $\tau$ shrinks them.</li>
+<li><span class="why">$\tau\to0^+$: divide numerator and denominator by $e^{z_{\max}/\tau}$</span> $$p_v^{(\tau)}=\frac{e^{(z_v-z_{\max})/\tau}}{\sum_ue^{(z_u-z_{\max})/\tau}}\to\begin{cases}1&amp;v=\arg\max\ (\text{unique})\\0&amp;\text{otherwise,}\end{cases}$$ because $z_v-z_{\max}&lt;0$ makes the exponent $\to-\infty$ — greedy decoding.</li>
+<li><span class="why">$\tau\to\infty$</span> $z_v/\tau\to0$ for all $v$, so $p_v^{(\tau)}\to e^0/\sum_ue^0=1/V$: the uniform distribution.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<h3>Top-K and top-P are renormalised truncations</h3>
+<ol class="steps">
+<li><span class="why">top-$K$</span> Let $\mathcal K$ be the $K$ most probable tokens; $p'_v=p_v\big/\sum_{u\in\mathcal K}p_u$ for $v\in\mathcal K$, $0$ otherwise. This sums to $1$ by construction.</li>
+<li><span class="why">top-$P$ (nucleus)</span> Take the smallest set $\mathcal N$ of top-ranked tokens with $\sum_{u\in\mathcal N}p_u\ge P$, then renormalise in the same way. The set size adapts to the confidence of the model (a peaked distribution keeps few tokens, a flat one many).</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Logits $z=(2,1,0)$ for tokens $a,b,c$. $\tau=1$: $(0.665,0.245,0.090)$. $\tau=0.5$: $z/\tau=(4,2,0)$, $e^{(4,2,0)}=(54.60,7.39,1)$, sum $62.99$, giving $(0.867,0.117,0.016)$ — sharper. $\tau=2$: $e^{(1,0.5,0)}=(2.718,1.649,1)$, sum $5.367$, giving $(0.507,0.307,0.186)$ — flatter. $\tau=100$: $(0.337,0.333,0.330)\approx$ uniform. Top-2 on the $\tau=1$ distribution: $0.665/0.910=0.731$ and $0.245/0.910=0.269$. Top-$P$ with $P=0.8$: $a$ alone has $0.665&lt;0.8$, $a+b=0.910\ge0.8$, so the nucleus is $\{a,b\}$ and the renormalised result is the same $(0.731,0.269)$.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Greedy = argmax each step; vanilla (ancestral) sampling = sample the full softmax; top-$K$ = keep $K$ best, renormalise, sample; top-$P$ = smallest set with cumulative probability $\ge P$ (nucleus), renormalise, sample (widely used); temperature divides the logits: high $\tau$ flatter, low $\tau$ sharper.</li>
+<li>Training is parallel (one pass, teacher forcing); generation is sequential (one pass per token).</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Applying temperature to the probabilities instead of the logits, or forgetting to renormalise after top-$K$ / top-$P$ truncation.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="summary" class="proof-head">Summary of all proofs</h2>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Result proved</th><th>Key trick</th></tr>
+<tr><td><a href="#chain">1</a></td><td>$p(x)=\prod_tp(x_t\mid x_{&lt;t})$ is exact; any normalised conditionals give a valid joint</td><td>definition of conditional probability + induction; sum out the last token</td></tr>
+<tr><td><a href="#rnn">2</a></td><td>RNN gradient $\le c^{T-1}$; attention path length 1</td><td>product of Jacobians + submultiplicative norm</td></tr>
+<tr><td><a href="#softlookup">3</a></td><td>Attention output is a convex combination of values</td><td>softmax is positive and sums to 1</td></tr>
+<tr><td><a href="#scale">4</a></td><td>$\operatorname{Var}(q^\top k)=d_k$, so divide by $\sqrt{d_k}$</td><td>independence: variances add; $\operatorname{Var}(X/c)=\operatorname{Var}X/c^2$; softmax Jacobian vanishes when saturated</td></tr>
+<tr><td><a href="#causal">5</a></td><td>Causal mask gives zero future weights and a prefix-only output</td><td>$\exp(-\infty)=0$ before the softmax; induction over position-wise layers</td></tr>
+<tr><td><a href="#shapes">6</a></td><td>Shapes $T\times d_M\to T\times T\to T\times d_v$; cost $\mathcal O(T^2d)$</td><td>matching inner dimensions; count dot products</td></tr>
+<tr><td><a href="#multihead">7</a></td><td>$H$ heads of width $d_M/H$: projections $3d_M^2$, plus $W_C$</td><td>$H\cdot d_M\cdot d_M/H$ cancels; block-matrix multiplication</td></tr>
+<tr><td><a href="#ffn">8</a></td><td>Attention with fixed weights is linear, so the MLP supplies nonlinearity per token</td><td>composition of linear maps is linear; position-wise = no mixing</td></tr>
+<tr><td><a href="#residual">9</a></td><td>Residual gradient contains an identity term</td><td>$\prod(I+J_l)=I+\sum J_l+\cdots$</td></tr>
+<tr><td><a href="#layernorm">10</a></td><td>LN output has mean 0, variance 1; $(\gamma,\beta)$ can undo it</td><td>linearity of the mean; choose $\gamma=\sigma,\beta=\mu$</td></tr>
+<tr><td><a href="#posenc">11</a></td><td>Attention is permutation-equivariant; $\mathrm{PE}(p+k)=R_k\mathrm{PE}(p)$</td><td>$P^\top P=I$; angle-addition formulas</td></tr>
+<tr><td><a href="#tf">12</a></td><td>NLL of an autoregressive model = sum of one-hot cross-entropies; parallel training</td><td>log of product = sum; one-hot kills all but one term; causal mask</td></tr>
+<tr><td><a href="#decode">13</a></td><td>Sequential exact sampling; temperature limits (greedy / uniform)</td><td>chain rule; divide by $e^{z_{\max}/\tau}$</td></tr>
+</table></div>
+
+</main>
+</body>
+</html>

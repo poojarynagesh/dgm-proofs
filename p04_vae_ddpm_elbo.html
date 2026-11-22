@@ -1,0 +1,932 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VAE, VQ-VAE and the DDPM ELBO — DGM Lecture Proofs</title>
+<link rel="stylesheet" href="assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="assets/style.css">
+<script defer src="assets/vendor/katex/katex.min.js"></script>
+<script defer src="assets/vendor/katex/auto-render.min.js"></script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/site.js"></script>
+</head>
+<body data-page="p04" data-root=".">
+<main class="content">
+
+<div class="hero">
+  <div class="kicker">Lecture proofs · VAE, VQ-VAE, DDPM</div>
+  <h1>VAE, VQ-VAE and the DDPM ELBO</h1>
+  <p class="lead">Every derivation from the 19 Sept and 3 Oct classes (plus the matching tutorials), written as numbered steps you can reproduce from memory: the VAE ELBO, the closed-form Gaussian KL, the reparameterisation trick, why prior samples are decodable, VQ-VAE quantisation with straight-through gradients, and then the whole DDPM ELBO as one long staged proof with a picture per stage.</p>
+</div>
+
+<div class="box key"><span class="box-title">One-paragraph summary</span>
+<p>A VAE maximises $\mathbb E_q[\log p_\theta(x\mid z)]-D_{KL}(q_\phi(z\mid x)\,\|\,p(z))$; the KL has a closed form for Gaussians and the expectation is made differentiable by writing $z=\mu+\sigma\odot\epsilon$. The KL term is also what makes $z\sim\mathcal N(0,I)$ a legitimate input for the decoder. VQ-VAE swaps the Gaussian latent for a nearest-neighbour lookup in a learned codebook, using a straight-through copy of the gradient. A DDPM is a hierarchical VAE whose encoder is a fixed Markov chain; its ELBO is built by (i) chain-rule + Markov factorisations, (ii) keeping only the variables each term depends on, (iii) a three-variable Bayes rule that anchors every forward step on $X_0$, (iv) a telescoping cancellation, which together leave <em>reconstruction</em> $-$ <em>prior matching</em> $-$ <em>sum of denoising-matching KLs</em>.</p></div>
+
+<div class="box"><span class="box-title">Roadmap of this page</span>
+<ol class="small">
+<li><a href="#vae-elbo">The VAE ELBO and its gap</a></li>
+<li><a href="#gauss-kl">Closed-form KL: diagonal Gaussian vs standard normal</a></li>
+<li><a href="#reparam">Reparameterisation trick: why gradients flow</a></li>
+<li><a href="#prior-sampling">Why sampling from the prior works (role of the KL term)</a></li>
+<li><a href="#vqvae">VQ-VAE: nearest-neighbour quantisation, straight-through gradient, codebook and commitment loss</a></li>
+<li><a href="#ddpm-forward">DDPM forward step is Gaussian, Markov, and keeps $\mathcal N(0,I)$ fixed</a></li>
+<li><a href="#ddpm-factor">The two joint factorisations</a></li>
+<li><a href="#ddpm-elbo-start">DDPM ELBO, stage 1: Jensen and expanding the logs</a></li>
+<li><a href="#ddpm-survive">DDPM ELBO, stage 2: which variables survive each expectation</a></li>
+<li><a href="#ddpm-bayes">DDPM ELBO, stage 3: the three-variable Bayes-rule trick</a></li>
+<li><a href="#ddpm-telescope">DDPM ELBO, stage 4: telescoping cancellation</a></li>
+<li><a href="#ddpm-final">DDPM ELBO, stage 5: assembling the three-term loss</a></li>
+<li><a href="#summary">Summary table of all proofs</a></li>
+</ol></div>
+
+<!-- ============================================================ -->
+<h2 id="vae-elbo" class="proof-head">1. The VAE ELBO and its gap</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>For any encoder $q_\phi(z\mid x)$ with full support, $\log p_\theta(x)=\underbrace{\mathbb E_{q_\phi(z\mid x)}[\log p_\theta(x\mid z)]-D_{KL}(q_\phi(z\mid x)\|p(z))}_{\text{ELBO}}+D_{KL}(q_\phi(z\mid x)\|p_\theta(z\mid x))\ \ge\ \text{ELBO}$. <em>Source:</em> recap at the start of the 19 Sept class (derived in the earlier VAE lectures; re-done in the 19 Sept and 3 Oct tutorials). <em>Used later:</em> identical template for the DDPM ELBO (stage 1 below), and the loss every VAE tutorial trains.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 318" style="max-width:100%;height:auto" role="img" aria-label="VAE as a graph: encoder gives mu and sigma, epsilon enters z, decoder reconstructs x; KL pulls q toward the prior">
+  <defs>
+    <marker id="p04f1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker>
+    <marker id="p04f1b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s2)"/></marker>
+    <marker id="p04f1c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s3)"/></marker>
+  </defs>
+  <g font-size="13" text-anchor="middle">
+    <rect x="20" y="118" width="64" height="44" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="52" y="145">x</text>
+    <rect x="130" y="104" width="120" height="72" rx="8" fill="var(--surface-2)" stroke="var(--s1)"/><text x="190" y="136">Encoder</text><text x="190" y="154" class="muted-t" font-size="12">q<tspan baseline-shift="sub" font-size="10">φ</tspan>(z | x)</text>
+    <rect x="300" y="84" width="86" height="34" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="343" y="106">μ<tspan baseline-shift="sub" font-size="10">φ</tspan>(x)</text>
+    <rect x="300" y="164" width="86" height="34" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="343" y="186">σ<tspan baseline-shift="sub" font-size="10">φ</tspan>(x)</text>
+    <circle cx="470" cy="141" r="24" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="470" y="146">z</text>
+    <circle cx="470" cy="36" r="20" fill="var(--surface-2)" stroke="var(--s7)"/><text x="470" y="41">ε</text>
+    <rect x="546" y="104" width="120" height="72" rx="8" fill="var(--surface-2)" stroke="var(--s1)"/><text x="606" y="136">Decoder</text><text x="606" y="154" class="muted-t" font-size="12">p<tspan baseline-shift="sub" font-size="10">θ</tspan>(x | z)</text>
+    <rect x="690" y="118" width="56" height="44" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="718" y="145">x̂</text>
+  </g>
+  <text x="498" y="40" font-size="12" class="muted-t">ε ~ N(0, I): external input</text>
+  <g stroke="var(--text-3)" stroke-width="1.6" fill="none">
+    <line x1="84" y1="140" x2="128" y2="140" marker-end="url(#p04f1)"/>
+    <line x1="250" y1="128" x2="298" y2="104" marker-end="url(#p04f1)"/>
+    <line x1="250" y1="152" x2="298" y2="178" marker-end="url(#p04f1)"/>
+    <line x1="386" y1="104" x2="447" y2="132" marker-end="url(#p04f1)"/>
+    <line x1="386" y1="178" x2="447" y2="151" marker-end="url(#p04f1)"/>
+    <line x1="470" y1="56" x2="470" y2="115" marker-end="url(#p04f1)"/>
+    <line x1="494" y1="141" x2="544" y2="141" marker-end="url(#p04f1)"/>
+    <line x1="666" y1="140" x2="688" y2="140" marker-end="url(#p04f1)"/>
+  </g>
+  <rect x="300" y="238" width="160" height="38" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-dasharray="5 3"/><text x="380" y="262" text-anchor="middle" font-size="13">p(z) = N(0, I)</text>
+  <path d="M190,176 V257 H298" fill="none" stroke="var(--s2)" stroke-width="2" marker-end="url(#p04f1b)"/>
+  <text x="196" y="226" font-size="12.5" style="fill:var(--s2)" font-weight="700">KL term: pull q<tspan baseline-shift="sub" font-size="10">φ</tspan>(z|x) toward p(z)</text>
+  <path d="M718,162 V300 H52 V164" fill="none" stroke="var(--s3)" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#p04f1c)"/>
+  <text x="385" y="292" text-anchor="middle" font-size="12.5" style="fill:var(--s3)" font-weight="700">reconstruction term: compare x̂ with x through log p<tspan baseline-shift="sub" font-size="10">θ</tspan>(x | z)</text>
+</svg>
+<figcaption>Figure 1 — The encoder appears twice in the ELBO: inside the expectation (it produces the $z$ at which the decoder is evaluated) and inside the KL (which pulls $q_\phi(z\mid x)$ toward $p(z)$).</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Marginalise the joint: $$\log p_\theta(x)=\log\int p_\theta(x,z)\,dz$$ <span class="why">definition of a latent-variable model</span></li>
+<li>Multiply and divide by the encoder (where $q_\phi(z\mid x)>0$): $$\log p_\theta(x)=\log\int q_\phi(z\mid x)\,\frac{p_\theta(x,z)}{q_\phi(z\mid x)}\,dz$$ <span class="why">multiply-and-divide trick</span></li>
+<li>Recognise an expectation: $$\log p_\theta(x)=\log\mathbb E_{q_\phi(z\mid x)}\!\left[\frac{p_\theta(x,z)}{q_\phi(z\mid x)}\right]$$ <span class="why">definition of expectation</span></li>
+<li>Move the log inside: $$\log p_\theta(x)\ \ge\ \mathbb E_{q_\phi(z\mid x)}\!\left[\log\frac{p_\theta(x,z)}{q_\phi(z\mid x)}\right]=:\text{ELBO}$$ <span class="why">Jensen: $\log$ is concave, so $\log\mathbb E\ge\mathbb E\log$</span></li>
+<li>Factorise the joint: $$p_\theta(x,z)=p_\theta(x\mid z)\,p(z)$$ <span class="why">chain rule of probability; prior $p(z)$</span></li>
+<li>Split the log: $$\text{ELBO}=\mathbb E_{q_\phi}[\log p_\theta(x\mid z)]+\mathbb E_{q_\phi}\!\left[\log\frac{p(z)}{q_\phi(z\mid x)}\right]$$ <span class="why">$\log(ab/c)=\log a+\log(b/c)$</span></li>
+<li>The second term is a KL with the opposite sign: $$\mathbb E_{q_\phi}\!\left[\log\frac{p(z)}{q_\phi(z\mid x)}\right]=-\mathbb E_{q_\phi}\!\left[\log\frac{q_\phi(z\mid x)}{p(z)}\right]=-D_{KL}(q_\phi(z\mid x)\,\|\,p(z))$$ <span class="why">definition of KL</span></li>
+<li>Hence $$\text{ELBO}=\underbrace{\mathbb E_{q_\phi(z\mid x)}[\log p_\theta(x\mid z)]}_{\text{reconstruction}}-\underbrace{D_{KL}(q_\phi(z\mid x)\,\|\,p(z))}_{\text{KL term}}$$ <span class="why">steps 6–7</span></li>
+<li>(step filled in — not written out in class) <strong>Size of the gap.</strong> Use the other factorisation $p_\theta(x,z)=p_\theta(z\mid x)\,p_\theta(x)$ in step 4: $$\text{ELBO}=\mathbb E_{q_\phi}\!\left[\log p_\theta(x)+\log\frac{p_\theta(z\mid x)}{q_\phi(z\mid x)}\right]=\log p_\theta(x)-D_{KL}(q_\phi(z\mid x)\,\|\,p_\theta(z\mid x))$$ <span class="why">$\log p_\theta(x)$ does not depend on $z$, so it leaves the expectation</span></li>
+<li>Since $D_{KL}\ge0$, $\text{ELBO}\le\log p_\theta(x)$ with equality iff $q_\phi(z\mid x)=p_\theta(z\mid x)$. Maximising the ELBO therefore raises the likelihood and shrinks the approximation gap at the same time. <span class="why">Gibbs inequality</span></li>
+<li>(step filled in) <strong>From ELBO to loss.</strong> Training minimises $-\text{ELBO}$. With a Gaussian decoder of fixed variance, $\log p_\theta(x\mid z)=-\dfrac{\|x-\hat x_\theta(z)\|^2}{2\sigma_x^2}-\text{const}$, so the reconstruction loss is MSE up to scale; with Bernoulli pixels it is the binary cross-entropy $-\sum_j[x_j\log\hat x_j+(1-x_j)\log(1-\hat x_j)]$. <span class="why">plug in the likelihood the decoder is assumed to have</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Write the ELBO as <strong>reconstruction $-$ KL$(q_\phi(z\mid x)\|p(z))$</strong>; the loss is its negative. The KL term is subtracted in the ELBO, added in the loss.</li>
+<li>Professor's recap of training: encoder outputs $\mu_\phi(x),\sigma_\phi(x)$; sample $\epsilon\sim\mathcal N(0,1)$; $z=\mu+\sigma\odot\epsilon$; decoder output is compared with $x$; $\theta$ and $\phi$ are updated by gradient descent.</li>
+<li>The encoder is needed <strong>during training</strong> because it sits in two places: the KL and the expectation over $z$. At generation time only the decoder is used.</li>
+<li>The reconstruction loss is dictated by the decoder's likelihood: MSE is <em>not</em> automatic (Bernoulli gives BCE).</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Getting the Jensen direction wrong. $\log$ is concave, so $\log\mathbb E[\cdot]\ge\mathbb E[\log\cdot]$ — and that is exactly why the expectation of the log is a <em>lower</em> bound.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="gauss-kl" class="proof-head">2. Closed-form KL: diagonal Gaussian vs standard normal</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>For $q=\mathcal N(\mu,\operatorname{diag}(\sigma^2))$ and $p=\mathcal N(0,I)$: $D_{KL}(q\|p)=\tfrac12\sum_j(\mu_j^2+\sigma_j^2-1-\log\sigma_j^2)$. <em>Source:</em> formula stated in the 19 Sept class ("closed form because both are Gaussian") and in the Sept 19 / Oct 3 tutorials; the derivation was not written out (step filled in). <em>Used later:</em> the KL term of every VAE loss; the same computation gives the DDPM consistency term.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 302" style="max-width:100%;height:auto" role="img" aria-label="Two Gaussian densities: q with mean 1 and sd 0.5, and the standard normal prior">
+  <defs><marker id="p04f2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <line x1="50" y1="210" x2="710" y2="210" stroke="var(--text-3)" stroke-width="1.4"/>
+  <g font-size="12" text-anchor="middle" class="muted-t">
+    <text x="60" y="228">-3</text><text x="150" y="228">-2</text><text x="240" y="228">-1</text><text x="330" y="228">0</text><text x="420" y="228">1</text><text x="510" y="228">2</text><text x="600" y="228">3</text><text x="690" y="228">4</text>
+  </g>
+  <path d="M60,209 L69,209 L78,208 L87,208 L96,207 L105,206 L114,206 L123,204 L132,203 L141,201 L150,199 L159,197 L168,194 L177,191 L186,188 L195,184 L204,180 L213,176 L222,171 L231,166 L240,162 L249,157 L258,152 L267,148 L276,143 L285,140 L294,136 L303,134 L312,132 L321,131 L330,130 L339,131 L348,132 L357,134 L366,136 L375,140 L384,143 L393,148 L402,152 L411,157 L420,162 L429,166 L438,171 L447,176 L456,180 L465,184 L474,188 L483,191 L492,194 L501,197 L510,199 L519,201 L528,203 L537,204 L546,206 L555,206 L564,207 L573,208 L582,208 L591,209 L600,209 L609,209 L618,210" fill="none" stroke="var(--s2)" stroke-width="2.6"/>
+  <path d="M276,209 L285,208 L294,207 L303,205 L312,201 L321,196 L330,188 L339,178 L348,166 L357,150 L366,132 L375,113 L384,94 L393,77 L402,63 L411,54 L420,50 L429,54 L438,63 L447,77 L456,94 L465,113 L474,132 L483,150 L492,166 L501,178 L510,188 L519,196 L528,201 L537,205 L546,207 L555,208 L564,209" fill="none" stroke="var(--s1)" stroke-width="2.6"/>
+  <line x1="420" y1="210" x2="420" y2="50" stroke="var(--s1)" stroke-dasharray="4 3"/>
+  <line x1="330" y1="210" x2="330" y2="130" stroke="var(--s2)" stroke-dasharray="4 3"/>
+  <line x1="332" y1="244" x2="418" y2="244" stroke="var(--text-3)" stroke-width="1.4" marker-end="url(#p04f2)"/>
+  <text x="375" y="262" text-anchor="middle" font-size="12.5">shift: μ² term</text>
+  <text x="474" y="62" font-size="13" style="fill:var(--s1)" font-weight="700">q = N(1, 0.5²)</text>
+  <text x="222" y="118" font-size="13" style="fill:var(--s2)" font-weight="700">p = N(0, 1)  (prior)</text>
+  <text x="560" y="140" font-size="12.5" class="muted-t">narrow q: σ² − 1 − log σ² &gt; 0</text>
+  <text x="560" y="158" font-size="12.5" class="muted-t">off-centre q: μ² &gt; 0</text>
+  <text x="560" y="176" font-size="12.5" class="muted-t">KL = 0 only if q = p</text>
+  <text x="560" y="290" font-size="13" font-weight="700" text-anchor="middle" dx="-60">KL(q ‖ p) = ½(1 + 0.25 − 1 − ln 0.25) = 0.818</text>
+</svg>
+<figcaption>Figure 2 — The KL penalises both an off-centre mean ($\mu^2$) and a variance different from 1 ($\sigma^2-1-\log\sigma^2$, which is zero only at $\sigma^2=1$).</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Both densities factorise over the $d_z$ latent coordinates (diagonal covariance, identity prior): $$\log\frac{q(z)}{p(z)}=\sum_{j=1}^{d_z}\log\frac{q_j(z_j)}{p_j(z_j)}\quad\Rightarrow\quad D_{KL}(q\|p)=\sum_{j=1}^{d_z}D_{KL}(q_j\|p_j)$$ <span class="why">independence of coordinates + linearity of expectation</span></li>
+<li>Work in one coordinate, $q_j=\mathcal N(\mu,\sigma^2)$, $p_j=\mathcal N(0,1)$: $$D_{KL}(q_j\|p_j)=\mathbb E_{z\sim q_j}\big[\log q_j(z)-\log p_j(z)\big]$$ <span class="why">definition of KL</span></li>
+<li>Write both log-densities: $$\log q_j(z)=-\tfrac12\log(2\pi)-\tfrac12\log\sigma^2-\frac{(z-\mu)^2}{2\sigma^2},\qquad \log p_j(z)=-\tfrac12\log(2\pi)-\frac{z^2}{2}$$ <span class="why">Gaussian density</span></li>
+<li>Subtract (the $\log 2\pi$ cancels): $$\log q_j-\log p_j=-\tfrac12\log\sigma^2-\frac{(z-\mu)^2}{2\sigma^2}+\frac{z^2}{2}$$ <span class="why">algebra</span></li>
+<li>Take the expectation under $q_j$ using $\mathbb E[(z-\mu)^2]=\sigma^2$ and $\mathbb E[z^2]=\sigma^2+\mu^2$: $$D_{KL}(q_j\|p_j)=-\tfrac12\log\sigma^2-\frac{\sigma^2}{2\sigma^2}+\frac{\sigma^2+\mu^2}{2}$$ <span class="why">variance definition; $\mathbb E[z^2]=\operatorname{Var}+\text{mean}^2$</span></li>
+<li>Collect terms: $$D_{KL}(q_j\|p_j)=\tfrac12\big(\mu^2+\sigma^2-1-\log\sigma^2\big)$$ <span class="why">$-\tfrac12=-\tfrac12\cdot1$</span></li>
+<li>Sum over coordinates: $$D_{KL}(q\|p)=\tfrac12\sum_{j}\big(\mu_j^2+\sigma_j^2-1-\log\sigma_j^2\big)$$ <span class="why">step 1</span></li>
+<li>Network form: the encoder outputs $\text{logvar}=\log\sigma^2$ (unconstrained, and $\sigma^2=e^{\text{logvar}}>0$ automatically): $$D_{KL}=-\tfrac12\sum_j\big(1+\text{logvar}_j-\mu_j^2-e^{\text{logvar}_j}\big)$$ <span class="why">substitute $\sigma_j^2=e^{\text{logvar}_j}$</span></li>
+<li>Non-negativity check: $f(s)=s-1-\log s$ has $f'(s)=1-1/s$, minimum at $s=1$ where $f=0$; and $\mu^2\ge0$. So $D_{KL}\ge0$ with equality iff $\mu=0,\sigma=1$. <span class="why">calculus</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Two latent dimensions, $(\mu_1,\sigma_1)=(1,\,0.5)$ and $(\mu_2,\sigma_2)=(0.5,\,2)$.</p>
+<p>Dimension 1: $\tfrac12(1+0.25-1-\ln0.25)=\tfrac12(0.25+1.386294)=0.818147$. Dimension 2: $\tfrac12(0.25+4-1-\ln4)=\tfrac12(3.25-1.386294)=0.931853$. Total $=1.750000$.</p>
+<p>Logvar form for dimension 1: $\text{logvar}_1=\ln0.25=-1.386294$, so $-\tfrac12(1-1.386294-1-0.25)=-\tfrac12(-1.636294)=0.818147$. Same value.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Both $q_\phi(z\mid x)$ and $p(z)$ are Gaussian, so the KL term is <strong>deterministic and differentiable in $\phi$</strong> — no sampling needed for it (the professor's recap).</li>
+<li>Memorise $\tfrac12\sum(\mu^2+\sigma^2-1-\log\sigma^2)$ and the three-line derivation: expectation of log-ratio, $\mathbb E[(z-\mu)^2]=\sigma^2$, $\mathbb E[z^2]=\sigma^2+\mu^2$.</li>
+<li>Diagonal covariance (not "diagonally dominant"): $d_z$ variances, not a $d_z\times d_z$ matrix.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Confusing $\sigma$ with $\sigma^2$ and $\log\sigma^2$: the formula uses the variance; with log-variance output, $\sigma=\exp(\tfrac12\,\text{logvar})$ (the $\tfrac12$ is needed to get the standard deviation).</p></div>
+
+<!-- ============================================================ -->
+<h2 id="reparam" class="proof-head">3. Reparameterisation trick: why gradients flow</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>With $\epsilon\sim\mathcal N(0,I)$ and $z=\mu_\phi(x)+\sigma_\phi(x)\odot\epsilon$: (a) $z\sim\mathcal N(\mu_\phi,\operatorname{diag}\sigma_\phi^2)$, and (b) $\nabla_\phi\,\mathbb E_{q_\phi(z\mid x)}[f(z)]=\mathbb E_{\epsilon}[\nabla_\phi f(\mu_\phi+\sigma_\phi\odot\epsilon)]$, so the gradient can be taken <em>through</em> the sample. <em>Source:</em> 19 Sept class (training recap and Q&amp;A "isn't there a subtlety in sampling from $\mu,\sigma$?") and the 19 Sept / 3 Oct tutorials. <em>Used later:</em> every VAE; the DDPM forward step $X_t=\sqrt{\alpha_t}X_{t-1}+\sqrt{1-\alpha_t}\epsilon_t$ is the same device.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 270" style="max-width:100%;height:auto" role="img" aria-label="Left: sampling node blocks gradient. Right: epsilon is an external input and z is a deterministic function, so gradient reaches mu and sigma">
+  <defs>
+    <marker id="p04f3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker>
+    <marker id="p04f3c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s3)"/></marker>
+  </defs>
+  <line x1="380" y1="30" x2="380" y2="250" stroke="var(--text-3)" stroke-dasharray="3 4"/>
+  <text x="190" y="22" text-anchor="middle" font-size="14" font-weight="700">Direct sampling: z ~ N(μ, σ²)</text>
+  <text x="570" y="22" text-anchor="middle" font-size="14" font-weight="700">Reparameterised: z = μ + σ·ε</text>
+  <g font-size="13" text-anchor="middle">
+    <rect x="12" y="120" width="52" height="34" rx="8" fill="var(--surface-2)" stroke="var(--s1)"/><text x="38" y="142">φ</text>
+    <rect x="96" y="120" width="70" height="34" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="131" y="142">μ, σ</text>
+    <rect x="198" y="112" width="86" height="50" rx="10" fill="var(--accent-soft)" stroke="var(--s8)" stroke-width="2" stroke-dasharray="5 3"/><text x="241" y="134">z</text><text x="241" y="151" class="muted-t" font-size="11.5">random draw</text>
+    <circle cx="336" cy="137" r="22" fill="var(--surface-2)" stroke="var(--s2)"/><text x="336" y="142">L</text>
+
+    <rect x="392" y="120" width="52" height="34" rx="8" fill="var(--surface-2)" stroke="var(--s1)"/><text x="418" y="142">φ</text>
+    <rect x="476" y="120" width="70" height="34" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="511" y="142">μ, σ</text>
+    <rect x="578" y="112" width="104" height="50" rx="10" fill="var(--accent-soft)" stroke="var(--s1)" stroke-width="2"/><text x="630" y="134">z = μ + σ·ε</text><text x="630" y="151" class="muted-t" font-size="11.5">deterministic</text>
+    <circle cx="630" cy="64" r="20" fill="var(--surface-2)" stroke="var(--s7)"/><text x="630" y="69">ε</text>
+    <circle cx="722" cy="137" r="22" fill="var(--surface-2)" stroke="var(--s2)"/><text x="722" y="142">L</text>
+  </g>
+  <text x="656" y="60" font-size="11.5" class="muted-t">N(0, I), no φ inside</text>
+  <g stroke="var(--text-3)" stroke-width="1.6" fill="none">
+    <line x1="64" y1="137" x2="94" y2="137" marker-end="url(#p04f3)"/>
+    <line x1="166" y1="137" x2="196" y2="137" marker-end="url(#p04f3)"/>
+    <line x1="284" y1="137" x2="312" y2="137" marker-end="url(#p04f3)"/>
+    <line x1="444" y1="137" x2="474" y2="137" marker-end="url(#p04f3)"/>
+    <line x1="546" y1="137" x2="576" y2="137" marker-end="url(#p04f3)"/>
+    <line x1="682" y1="137" x2="698" y2="137" marker-end="url(#p04f3)"/>
+    <line x1="630" y1="84" x2="630" y2="110" marker-end="url(#p04f3)"/>
+  </g>
+  <g stroke="var(--s3)" stroke-width="2" stroke-dasharray="6 4" fill="none">
+    <path d="M326,160 Q300,196 262,166" marker-end="url(#p04f3c)"/>
+    <path d="M712,160 Q690,196 660,166" marker-end="url(#p04f3c)"/>
+    <path d="M590,166 Q560,196 538,158" marker-end="url(#p04f3c)"/>
+    <path d="M488,158 Q460,190 430,158" marker-end="url(#p04f3c)"/>
+  </g>
+  <path d="M198,166 Q170,196 148,158" fill="none" stroke="var(--s8)" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="172" y="190" text-anchor="middle" font-size="20" font-weight="700" style="fill:var(--s8)">✕</text>
+  <text x="190" y="226" text-anchor="middle" font-size="12.5" class="muted-t">a draw is not a function of (μ, σ):</text>
+  <text x="190" y="243" text-anchor="middle" font-size="12.5" class="muted-t">no ∂z/∂μ, ∂z/∂σ, gradient stops at z</text>
+  <text x="570" y="226" text-anchor="middle" font-size="12.5" style="fill:var(--s3)" font-weight="700">∂z/∂μ = 1,   ∂z/∂σ = ε</text>
+  <text x="570" y="243" text-anchor="middle" font-size="12.5" class="muted-t">green dashed = backward pass; ε is just an input</text>
+</svg>
+<figcaption>Figure 3 — Same distribution of $z$, different computational graph. Moving the randomness into a parameter-free input $\epsilon$ makes $z$ an ordinary differentiable node.</figcaption>
+</figure>
+
+<ol class="steps">
+<li><strong>(a) Law of $z$.</strong> For a scalar, $\mathbb E[\mu+\sigma\epsilon]=\mu$ and $\operatorname{Var}(\mu+\sigma\epsilon)=\sigma^2\operatorname{Var}(\epsilon)=\sigma^2$; an affine map of a Gaussian is Gaussian, so $z\sim\mathcal N(\mu,\sigma^2)$. Coordinatewise, $z\sim\mathcal N(\mu,\operatorname{diag}\sigma^2)$. <span class="why">shift-and-scale of a Gaussian</span></li>
+<li>Therefore any expectation over $z$ can be computed over $\epsilon$ instead: $$\mathbb E_{z\sim q_\phi(z\mid x)}[f(z)]=\mathbb E_{\epsilon\sim\mathcal N(0,I)}\big[f(\mu_\phi(x)+\sigma_\phi(x)\odot\epsilon)\big]$$ <span class="why">change of variables (law of the unconscious statistician)</span></li>
+<li>The density of $\epsilon$, $\mathcal N(\epsilon;0,I)$, contains <strong>no</strong> $\phi$. All the dependence on $\phi$ now sits inside the integrand. <span class="why">this is the whole point</span></li>
+<li><strong>(b)</strong> Differentiate: $$\nabla_\phi\,\mathbb E_{\epsilon}\big[f(\mu_\phi+\sigma_\phi\odot\epsilon)\big]=\mathbb E_{\epsilon}\big[\nabla_\phi f(\mu_\phi+\sigma_\phi\odot\epsilon)\big]$$ <span class="why">$\nabla$ and $\mathbb E$ commute because the sampling measure does not depend on $\phi$ (regularity conditions assumed)</span></li>
+<li>Apply the chain rule through the deterministic map $z=\mu+\sigma\odot\epsilon$: $$\frac{\partial f}{\partial\mu}=f'(z)\cdot1,\qquad \frac{\partial f}{\partial\sigma}=f'(z)\cdot\epsilon$$ <span class="why">chain rule; $\mu,\sigma$ are outputs of the encoder, so backprop continues into $\phi$</span></li>
+<li>Monte-Carlo estimate with a few draws $\epsilon^{(l)}$: $$\nabla_\phi\,\mathbb E_q[f]\approx\frac1L\sum_{l=1}^{L}\nabla_\phi f\big(\mu_\phi+\sigma_\phi\odot\epsilon^{(l)}\big)$$ <span class="why">sample mean of an unbiased integrand (in training, $L=1$ per data point)</span></li>
+<li><em>Contrast:</em> without the trick the parameter is inside the density, $\nabla_\phi\int q_\phi(z\mid x)f(z)\,dz=\int\nabla_\phi q_\phi\,f\,dz$, which is not the expectation of a gradient of anything you can evaluate at a sampled $z$; and a sampled $z$ itself has no derivative with respect to $\phi$. <span class="why">why the lecture says the expectation "cannot be directly differentiated"</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Take $\mu=1$, $\sigma=0.5$, $f(z)=(z-2)^2$, one draw $\epsilon=0.8$. Then $z=1+0.5\cdot0.8=1.4$, $f'(z)=2(1.4-2)=-1.2$, so $\partial f/\partial\mu=-1.2$ and $\partial f/\partial\sigma=-1.2\cdot0.8=-0.96$.</p>
+<p>Unbiasedness: $\mathbb E_\epsilon[2(\mu+\sigma\epsilon-2)]=2(\mu-2)=-2$ and $\mathbb E_\epsilon[2(\mu+\sigma\epsilon-2)\epsilon]=2\sigma=1$. These match the exact derivatives of $\mathbb E[(z-2)^2]=(\mu-2)^2+\sigma^2$, namely $2(\mu-2)=-2$ and $2\sigma=1$. A single draw $(-1.2,-0.96)$ is a noisy but unbiased estimate of $(-2,\,1)$.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>$\epsilon$ is parameter-free; the transformation from $(\mu,\sigma)$ to $z$ is differentiable. "Randomness is isolated in $\epsilon$."</li>
+<li>Implementation: $\sigma=\exp(0.5\,\text{logvar})$, $\epsilon=\texttt{randn\_like}(\sigma)$, $z=\mu+\sigma\odot\epsilon$.</li>
+<li>The professor's point: the trick is what lets the expectation over $Z$ in the ELBO be differentiated during training, which is why the encoder outputs $\mu,\sigma$ rather than the model using raw draws.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Saying "$z$ is random, so it has no gradient". The sample is random but, <em>given</em> $\epsilon$, it is a deterministic differentiable function of $\mu,\sigma$; the gradient flows along that function and treats $\epsilon$ as a constant input.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="prior-sampling" class="proof-head">4. Why sampling from the prior works (role of the KL term)</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>The decoder was trained on $z\sim q_\phi(z\mid x)$, yet generation feeds it $z\sim p(z)=\mathcal N(0,I)$. This is justified because maximising the ELBO minimises the KL term, driving $q_\phi(z\mid x)\to p(z)$. <em>Source:</em> 19 Sept class, "Why sampling from the prior works: the role of the KL term". The aggregate-posterior identity in steps 4–7 is a step filled in — not written out in class. <em>Used later:</em> the generation recipe of every latent-variable model (VAE, DDPM, flows): sample the prior, then decode.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 300" style="max-width:100%;height:auto" role="img" aria-label="Latent plane: without KL the posteriors are scattered with holes; with KL they overlap the prior so a prior sample lands in decoded territory">
+  <text x="190" y="22" text-anchor="middle" font-size="14" font-weight="700">KL weak: posteriors spread apart</text>
+  <text x="570" y="22" text-anchor="middle" font-size="14" font-weight="700">KL strong: posteriors fill N(0, I)</text>
+  <rect x="30" y="34" width="320" height="220" rx="10" fill="var(--surface-2)" stroke="var(--text-3)"/>
+  <rect x="410" y="34" width="320" height="220" rx="10" fill="var(--surface-2)" stroke="var(--text-3)"/>
+  <circle cx="190" cy="144" r="90" fill="none" stroke="var(--s2)" stroke-width="2" stroke-dasharray="6 4"/>
+  <circle cx="570" cy="144" r="90" fill="none" stroke="var(--s2)" stroke-width="2" stroke-dasharray="6 4"/>
+  <g fill="var(--s1)" fill-opacity="0.55" stroke="var(--s1)">
+    <circle cx="82" cy="78" r="14"/><circle cx="296" cy="92" r="14"/><circle cx="76" cy="190" r="14"/><circle cx="300" cy="206" r="14"/><circle cx="196" cy="62" r="12"/><circle cx="214" cy="236" r="12"/>
+  </g>
+  <g fill="var(--s1)" fill-opacity="0.28" stroke="var(--s1)">
+    <circle cx="540" cy="112" r="44"/><circle cx="610" cy="122" r="44"/><circle cx="552" cy="180" r="44"/><circle cx="614" cy="174" r="44"/><circle cx="578" cy="146" r="40"/>
+  </g>
+  <circle cx="190" cy="144" r="7" fill="var(--s8)"/>
+  <text x="190" y="166" text-anchor="middle" font-size="12.5" style="fill:var(--s8)" font-weight="700">prior sample</text>
+  <text x="190" y="182" text-anchor="middle" font-size="12" class="muted-t">in a hole: never decoded</text>
+  <circle cx="570" cy="144" r="7" fill="var(--s8)"/>
+  <g font-size="12" text-anchor="middle" class="muted-t">
+    <text x="190" y="272">dashed ring = 2σ contour of the prior;</text>
+    <text x="190" y="288">blue discs = q(z | x) for different x</text>
+    <text x="570" y="272">red dot lies where the decoder was trained,</text>
+    <text x="570" y="288">so it decodes to a sensible x</text>
+  </g>
+</svg>
+<figcaption>Figure 4 — The KL term pulls each posterior toward $\mathcal N(0,I)$. Where posteriors tile the prior, a prior sample lands inside territory the decoder has seen.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>The objective is maximised and the KL enters with a minus sign: $$\text{ELBO}=\mathbb E_{q_\phi}[\log p_\theta(x\mid z)]-D_{KL}(q_\phi(z\mid x)\|p(z))$$ <span class="why">proof 1</span></li>
+<li>So maximising the ELBO <em>minimises</em> $D_{KL}(q_\phi(z\mid x)\|p(z))$ (against the reconstruction term, which pulls the other way). <span class="why">sign of the term</span></li>
+<li>If the KL reaches $0$ then $q_\phi(z\mid x)=p(z)$ for that $x$. <span class="why">$D_{KL}=0$ iff the distributions are equal</span> Hence, for a well-trained VAE, $q_\phi(Z\mid X)\approx\mathcal N(0,I)$ for essentially every $X$, so drawing $z\sim\mathcal N(0,1)$ is (approximately) drawing from $q_\phi(Z\mid X)$ — the input distribution the decoder was fit to. This is the argument given in class.</li>
+<li>(step filled in) <strong>Averaged version.</strong> Define the aggregate posterior $q(z)=\mathbb E_{x\sim\text{data}}\,q_\phi(z\mid x)$ — the distribution of latent codes the decoder actually sees in training. Average the KL over the data: $$\mathbb E_x\,D_{KL}(q_\phi(z\mid x)\|p(z))=\mathbb E_x\mathbb E_{q_\phi(z\mid x)}\!\left[\log\frac{q_\phi(z\mid x)}{p(z)}\right]$$ <span class="why">definition</span></li>
+<li>Insert $q(z)$ by multiply-and-divide inside the log: $$=\mathbb E_x\mathbb E_{q_\phi(z\mid x)}\!\left[\log\frac{q_\phi(z\mid x)}{q(z)}+\log\frac{q(z)}{p(z)}\right]$$ <span class="why">$\log\frac ab=\log\frac ac+\log\frac cb$</span></li>
+<li>For the second piece, $\mathbb E_x\mathbb E_{q_\phi(z\mid x)}[g(z)]=\mathbb E_{q(z)}[g(z)]$, so it equals $D_{KL}(q(z)\|p(z))$; the first piece is the mutual information $I_q(X;Z)$. Hence $$\mathbb E_x\,D_{KL}(q_\phi(z\mid x)\|p(z))=I_q(X;Z)+D_{KL}(q(z)\|p(z))$$ <span class="why">definition of aggregate posterior and of mutual information</span></li>
+<li>Both pieces are $\ge0$, so $D_{KL}(q(z)\|p(z))\le\mathbb E_x D_{KL}(q_\phi(z\mid x)\|p(z))$: a small KL term <em>guarantees</em> that the codes seen in training are distributed like the prior. <span class="why">non-negativity of KL and of mutual information</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>One latent dimension, prior $\mathcal N(0,1)$ (density at $0$: $0.3989$), two data clusters with equally likely posteriors $\mathcal N(\pm m,s^2)$.</p>
+<p><strong>Weak KL:</strong> $m=2$, $s^2=0.25$. KL per posterior $=\tfrac12(4+0.25-1-\ln0.25)=2.318$. Aggregate density at $z=0$: $\mathcal N(0;2,0.25)=e^{-8}/\sqrt{2\pi\cdot0.25}=0.000268$ — about $1/1490$ of the prior density, so a prior sample at $0$ falls in a hole the decoder never saw.</p>
+<p><strong>Strong KL:</strong> $m=0.5$, $s^2=0.5625$. KL per posterior $=\tfrac12(0.25+0.5625-1-\ln0.5625)=0.194$. Aggregate density at $0$: $\mathcal N(0;0.5,0.5625)=0.426$, ratio $1.07$ to the prior. A cheap KL buys good coverage.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Generation recipe for <em>any</em> latent-variable model $P_\theta(X)=\int P_\theta(X,Z)dZ$: (1) $z_{\text{new}}\sim p(Z)$, (2) $x\sim p_\theta(X\mid Z=z_{\text{new}})$. For a VAE, option A: use the decoder output $\hat x_\theta(z)$ (the mean); option B: sample from the Gaussian centred on it.</li>
+<li>Rule stated explicitly: <strong>encoder for embedding extraction, decoder for generation.</strong> Embeddings: option A use $\mu_{\phi^*}(x_{\text{test}})$ (one fixed embedding); option B sample from $\mathcal N(\mu,\sigma)$ (no fixed embedding).</li>
+<li>Why is the encoder still needed if generation only uses $\mathcal N(0,1)$? Because it is in the KL <em>and</em> the reconstruction expectation during training.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Reading "KL $\to0$" literally for every $x$. Exact zero means $q_\phi(z\mid x)$ ignores $x$ (posterior collapse, mutual information $0$) and the decoder cannot reconstruct. The trained VAE balances the two terms; the prior-sampling argument is approximate.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="vqvae" class="proof-head">5. VQ-VAE: nearest-neighbour quantisation, straight-through gradient, codebook and commitment loss</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>With deterministic encoder/decoder and a codebook $\{z_1,\dots,z_M\}$: $z_q(x)=z_{j^*}$ with $j^*=\arg\min_j\|z_e(x)-z_j\|$; the gradient of the reconstruction loss is passed from $z_q$ to $z_e$ unchanged (straight-through); the codebook is learned by gradient descent on the latent-matching loss, and the full loss is reconstruction + codebook + commitment. <em>Source:</em> 19 Sept class (quantisation, two objectives, dictionary learning). The explicit straight-through trick and stop-gradient split of the latent-matching loss (with $\beta$) are from the VQ-VAE paper, a step filled in — not written out in class. <em>Used later:</em> pretrained VQ-VAE decoders sit under modern generators; "what is generated is a latent, then decoded".</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 290" style="max-width:100%;height:auto" role="img" aria-label="VQ-VAE pipeline with codebook lookup and straight-through gradient bypassing the quantiser">
+  <defs>
+    <marker id="p04f5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker>
+    <marker id="p04f5b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s2)"/></marker>
+    <marker id="p04f5c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s3)"/></marker>
+  </defs>
+  <g font-size="13" text-anchor="middle">
+    <rect x="8" y="108" width="52" height="34" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="34" y="130">x</text>
+    <rect x="86" y="100" width="100" height="50" rx="8" fill="var(--surface-2)" stroke="var(--s1)"/><text x="136" y="122">Encoder</text><text x="136" y="138" class="muted-t" font-size="11.5">deterministic</text>
+    <rect x="212" y="108" width="56" height="34" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="240" y="130">z<tspan baseline-shift="sub" font-size="10">e</tspan></text>
+    <rect x="296" y="92" width="150" height="66" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="2"/><text x="371" y="116">quantise</text><text x="371" y="134" font-size="12">j* = argmin ‖z<tspan baseline-shift="sub" font-size="10">e</tspan> − z<tspan baseline-shift="sub" font-size="10">j</tspan>‖</text>
+    <rect x="474" y="108" width="56" height="34" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="502" y="130">z<tspan baseline-shift="sub" font-size="10">q</tspan></text>
+    <rect x="558" y="100" width="100" height="50" rx="8" fill="var(--surface-2)" stroke="var(--s1)"/><text x="608" y="122">Decoder</text><text x="608" y="138" class="muted-t" font-size="11.5">deterministic</text>
+    <rect x="686" y="108" width="56" height="34" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="714" y="130">x̂</text>
+    <rect x="296" y="196" width="150" height="46" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-dasharray="5 3"/><text x="371" y="216">codebook</text><text x="371" y="233" class="muted-t" font-size="12">z<tspan baseline-shift="sub" font-size="10">1</tspan>, …, z<tspan baseline-shift="sub" font-size="10">M</tspan> (learned)</text>
+  </g>
+  <g stroke="var(--text-3)" stroke-width="1.6" fill="none">
+    <line x1="60" y1="125" x2="84" y2="125" marker-end="url(#p04f5)"/>
+    <line x1="186" y1="125" x2="210" y2="125" marker-end="url(#p04f5)"/>
+    <line x1="268" y1="125" x2="294" y2="125" marker-end="url(#p04f5)"/>
+    <line x1="446" y1="125" x2="472" y2="125" marker-end="url(#p04f5)"/>
+    <line x1="530" y1="125" x2="556" y2="125" marker-end="url(#p04f5)"/>
+    <line x1="658" y1="125" x2="684" y2="125" marker-end="url(#p04f5)"/>
+    <line x1="371" y1="194" x2="371" y2="160" marker-end="url(#p04f5)"/>
+  </g>
+  <path d="M600,98 V54 H244 V106" fill="none" stroke="var(--s3)" stroke-width="2.4" stroke-dasharray="7 4" marker-end="url(#p04f5c)"/>
+  <text x="420" y="46" text-anchor="middle" font-size="12.5" style="fill:var(--s3)" font-weight="700">straight-through: copy ∂L/∂z<tspan baseline-shift="sub" font-size="10">q</tspan> onto z<tspan baseline-shift="sub" font-size="10">e</tspan></text>
+  <text x="371" y="80" text-anchor="middle" font-size="12" style="fill:var(--s8)" font-weight="700">∂z<tspan baseline-shift="sub" font-size="10">q</tspan>/∂z<tspan baseline-shift="sub" font-size="10">e</tspan> = 0 almost everywhere</text>
+  <path d="M240,144 V220 H294" fill="none" stroke="var(--s2)" stroke-width="2" marker-end="url(#p04f5b)"/>
+  <text x="30" y="262" font-size="12.5" style="fill:var(--s2)" font-weight="700">codebook loss ‖sg[z<tspan baseline-shift="sub" font-size="10">e</tspan>] − z<tspan baseline-shift="sub" font-size="10">j*</tspan>‖²: only the chosen codeword moves toward z<tspan baseline-shift="sub" font-size="10">e</tspan></text>
+  <text x="30" y="280" font-size="12.5" class="muted-t">commitment loss β‖z<tspan baseline-shift="sub" font-size="10">e</tspan> − sg[z<tspan baseline-shift="sub" font-size="10">j*</tspan>]‖²: the encoder is pulled toward its codeword</text>
+</svg>
+<figcaption>Figure 5a — The decoder sees $z_q$, not $z_e$. The quantiser has zero gradient, so the reconstruction gradient is carried around it (green); the codebook is trained only by the latent-matching loss (orange).</figcaption>
+</figure>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 310" style="max-width:100%;height:auto" role="img" aria-label="Voronoi cells of three codewords, encoder output z_e inside the cell of z_2, codeword moving toward z_e after a gradient step">
+  <defs>
+    <marker id="p04f5d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s2)"/></marker>
+  </defs>
+  <rect x="30" y="20" width="370" height="275" rx="10" fill="var(--surface-2)" stroke="var(--text-3)"/>
+  <g stroke="var(--text-3)" stroke-width="1.4" stroke-dasharray="5 4">
+    <line x1="185" y1="185" x2="185" y2="295"/><line x1="30" y1="185" x2="185" y2="185"/><line x1="185" y1="185" x2="318" y2="52"/>
+  </g>
+  <g stroke="var(--text-3)" stroke-width="1" stroke-dasharray="2 3">
+    <line x1="230" y1="215" x2="110" y2="260"/><line x1="230" y1="215" x2="110" y2="110"/>
+  </g>
+  <line x1="230" y1="215" x2="260" y2="260" stroke="var(--s1)" stroke-width="2.4"/>
+  <g font-size="13" text-anchor="middle">
+    <circle cx="110" cy="260" r="8" fill="var(--s7)"/><text x="110" y="282">z<tspan baseline-shift="sub" font-size="10">1</tspan></text>
+    <circle cx="260" cy="260" r="8" fill="var(--s7)"/><text x="276" y="282">z<tspan baseline-shift="sub" font-size="10">2</tspan></text>
+    <circle cx="110" cy="110" r="8" fill="var(--s7)"/><text x="110" y="96">z<tspan baseline-shift="sub" font-size="10">3</tspan></text>
+    <circle cx="230" cy="215" r="6" fill="var(--s1)"/><text x="206" y="212">z<tspan baseline-shift="sub" font-size="10">e</tspan></text>
+    <circle cx="245" cy="237" r="8" fill="none" stroke="var(--s2)" stroke-width="2"/>
+  </g>
+  <path d="M258,254 L249,242" fill="none" stroke="var(--s2)" stroke-width="2" marker-end="url(#p04f5d)"/>
+  <text x="352" y="262" font-size="11.5" class="muted-t" text-anchor="middle">cell 2</text>
+  <text x="64" y="240" font-size="11.5" class="muted-t" text-anchor="middle">cell 1</text><text x="64" y="52" font-size="11.5" class="muted-t" text-anchor="middle">cell 3</text>
+  <g font-size="13">
+    <text x="425" y="52" font-weight="700">z<tspan baseline-shift="sub" font-size="10">e</tspan> = (0.8, 0.3); codewords (0,0), (1,0), (0,1)</text>
+    <text x="425" y="82">d to z<tspan baseline-shift="sub" font-size="10">1</tspan> = 0.854</text>
+    <text x="425" y="104" style="fill:var(--s1)" font-weight="700">d to z<tspan baseline-shift="sub" font-size="10">2</tspan> = 0.361   ← nearest, j* = 2</text>
+    <text x="425" y="126">d to z<tspan baseline-shift="sub" font-size="10">3</tspan> = 1.063</text>
+    <text x="425" y="162" font-weight="700">z<tspan baseline-shift="sub" font-size="10">q</tspan> = z<tspan baseline-shift="sub" font-size="10">2</tspan> = (1, 0)</text>
+    <text x="425" y="196" style="fill:var(--s2)" font-weight="700">one step, η = 0.25, on ‖sg[z<tspan baseline-shift="sub" font-size="10">e</tspan>] − z<tspan baseline-shift="sub" font-size="10">2</tspan>‖²:</text>
+    <text x="425" y="218">z<tspan baseline-shift="sub" font-size="10">2</tspan> ← z<tspan baseline-shift="sub" font-size="10">2</tspan> − 0.25·2(z<tspan baseline-shift="sub" font-size="10">2</tspan> − z<tspan baseline-shift="sub" font-size="10">e</tspan>)</text>
+    <text x="425" y="240">= (1, 0) − 0.25·(0.4, −0.6) = (0.9, 0.15)</text>
+    <text x="425" y="262" class="muted-t">squared gap 0.13 → 0.0325 (hollow ring)</text>
+  </g>
+</svg>
+<figcaption>Figure 5b — Nearest-neighbour quantisation partitions the encoder-output space into Voronoi cells (dashed bisectors). The codeword that won moves a fraction of the way toward the encoder output that chose it.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Encode, then quantise to the closest codeword: $$z_e=E_\phi(x_i),\qquad j^*=\arg\min_{j\in\{1,\dots,M\}}\|z_e-z_j\|,\qquad z_q=z_{j^*}$$ <span class="why">definition of vector quantisation (nearest neighbour)</span></li>
+<li>Decode the <em>quantised</em> vector: $$\hat x=D_\theta(z_q)$$ <span class="why">the decoder input is $z_q$, not $z_e$</span></li>
+<li>(step filled in) <strong>Why plain backprop fails.</strong> $z_q(z_e)$ is piecewise constant: it equals one fixed codeword on each Voronoi cell, so $\partial z_q/\partial z_e=0$ almost everywhere (and is undefined on cell boundaries). Hence $\nabla_\phi\|x-\hat x\|^2=0$ and the encoder would get no reconstruction signal. <span class="why">derivative of a piecewise-constant function</span></li>
+<li>(step filled in) <strong>Straight-through estimator.</strong> Define $z_q^{\text{ST}}=z_e+\operatorname{sg}[z_q-z_e]$, where $\operatorname{sg}$ (stop-gradient) is the identity in the forward pass and has zero derivative in the backward pass. Forward value: $z_e+(z_q-z_e)=z_q$, so the decoder is unchanged. Backward: $$\frac{\partial z_q^{\text{ST}}}{\partial z_e}=I\quad\Rightarrow\quad\frac{\partial L_{\text{rec}}}{\partial z_e}:=\frac{\partial L_{\text{rec}}}{\partial z_q}$$ <span class="why">identity added to a constant: gradient copied across the quantiser</span></li>
+<li>The decoder, which receives $z_q$ as an ordinary input, is trained by the usual gradient of the reconstruction loss $\|x_i-\hat x\|^2$. <span class="why">same as a VAE reconstruction objective</span></li>
+<li>Second objective, <strong>latent matching</strong> (the lecture's term): $\|z_e(x_i)-z_q(x_i)\|^2$. It is the only place the dictionary appears once the reconstruction path is cut by step 3–4. For $j=j^*$: $$\frac{\partial}{\partial z_j}\|z_e-z_j\|^2=2(z_j-z_e),\qquad\text{and }0\text{ for }j\neq j^*$$ <span class="why">gradient of a squared distance; $z_j$ are learned parameters, random at initialisation</span></li>
+<li>Gradient descent with step $\eta$ on that loss moves the winning codeword toward the encoder output that selected it: $$z_{j^*}\leftarrow z_{j^*}-\eta\cdot2(z_{j^*}-z_e)=(1-2\eta)\,z_{j^*}+2\eta\,z_e$$ <span class="why">dictionary learned jointly with $\phi,\theta$</span></li>
+<li>(step filled in) The same squared distance also pulls $z_e$ toward the codeword; to control the two effects separately the paper splits it with stop-gradients and weights the encoder side by $\beta$: $$L=\underbrace{\|x-\hat x\|^2}_{\text{reconstruction}}+\underbrace{\|\operatorname{sg}[z_e]-z_q\|^2}_{\text{codebook loss (updates }z_j)}+\underbrace{\beta\,\|z_e-\operatorname{sg}[z_q]\|^2}_{\text{commitment loss (updates }\phi)}$$ <span class="why">$\operatorname{sg}$ routes each term's gradient to one side only; $\beta\approx0.25$ in the paper</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>$M=3$ codewords $(0,0),(1,0),(0,1)$, encoder output $z_e=(0.8,0.3)$. Distances: $\sqrt{0.64+0.09}=0.854$, $\sqrt{0.04+0.09}=0.361$, $\sqrt{0.64+0.49}=1.063$, so $j^*=2$, $z_q=(1,0)$.</p>
+<p>Latent-matching loss $\|z_e-z_q\|^2=0.04+0.09=0.13$. Gradient on $z_2$: $2(z_2-z_e)=(0.4,-0.6)$. With $\eta=0.25$: $z_2\leftarrow(1,0)-0.25(0.4,-0.6)=(0.9,0.15)$. New squared gap $=(0.1)^2+(0.15)^2=0.0325=0.13\cdot(1-2\eta)^2=0.13\cdot0.25$. &#10003;</p>
+<p>Straight-through: if the decoder reports $\partial L_{\text{rec}}/\partial z_q=(-0.2,\,0.4)$, the encoder receives $\partial L_{\text{rec}}/\partial z_e=(-0.2,\,0.4)$ (the true derivative through $\arg\min$ would be $0$).</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Two changes versus a VAE: deterministic encoder/decoder (no $\mu,\sigma$, no reparameterisation) and a discrete latent from an $M$-vector dictionary. The decoder input $z_q$ differs from the encoder output $z_e$ by the quantisation step.</li>
+<li>Two objectives: reconstruction, and latent matching between $z_e$ and $z_q$ — "very similar to the VAE objective: reconstruction plus a regulariser on $Z$".</li>
+<li>Dictionary vectors are <strong>learned parameters</strong> (random init, gradient descent jointly with $\phi,\theta$), not fixed constants.</li>
+<li>Why VQ-VAE beats a plain VAE (professor): discretisation, and no Gaussian/reparameterisation restriction on the latent. Generation = produce a latent, then run the pretrained VQ-VAE decoder.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Claiming the gradient flows through the $\arg\min$. It does not; the encoder trains through the straight-through copy (reconstruction) and through the commitment term.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="ddpm-forward" class="proof-head">6. DDPM forward step is Gaussian, Markov, and keeps N(0,I) fixed</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>From $X_t=\sqrt{\alpha_t}X_{t-1}+\sqrt{1-\alpha_t}\,\epsilon_t$, $\epsilon_t\sim\mathcal N(0,I)$: (a) $q(X_t\mid X_{t-1})=\mathcal N(X_t;\sqrt{\alpha_t}X_{t-1},(1-\alpha_t)I)$ with no learnable parameter; (b) $X_t\perp\{X_0,\dots,X_{t-2}\}\mid X_{t-1}$; (c) if $X_{t-1}\sim\mathcal N(0,I)$ then $X_t\sim\mathcal N(0,I)$. <em>Source:</em> 19 Sept class ("The Forward Process Is a First-Order Markov Chain", "Deriving $q(X_t\mid X_{t-1})$"), recap on 3 Oct. Part (c) is a step filled in — the class argued stationarity through the unrolled mean (a student's observation) but did not write this one-line check. <em>Used later:</em> the Markov factorisation of $q$ in the next proof. (The closed-form marginal $q(X_t\mid X_0)$ and the posterior are on the next page of this site.)</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 250" style="max-width:100%;height:auto" role="img" aria-label="Forward chain X0 to XT with fresh noise injected at every step; no parameters">
+  <defs><marker id="p04f6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s2)"/></marker>
+  <marker id="p04f6g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s7)"/></marker></defs>
+  <g font-size="14" text-anchor="middle">
+    <circle cx="60" cy="120" r="24" fill="var(--s1)" fill-opacity="0.9" stroke="var(--s1)"/><text x="60" y="125" style="fill:#fff">X<tspan baseline-shift="sub" font-size="10">0</tspan></text>
+    <circle cx="190" cy="120" r="24" fill="var(--s1)" fill-opacity="0.65" stroke="var(--s1)"/><text x="190" y="125">X<tspan baseline-shift="sub" font-size="10">1</tspan></text>
+    <circle cx="320" cy="120" r="24" fill="var(--s1)" fill-opacity="0.42" stroke="var(--s1)"/><text x="320" y="125">X<tspan baseline-shift="sub" font-size="10">2</tspan></text>
+    <circle cx="560" cy="120" r="24" fill="var(--s1)" fill-opacity="0.2" stroke="var(--s1)"/><text x="560" y="125">X<tspan baseline-shift="sub" font-size="10">T−1</tspan></text>
+    <circle cx="690" cy="120" r="24" fill="var(--s1)" fill-opacity="0.08" stroke="var(--s1)"/><text x="690" y="125">X<tspan baseline-shift="sub" font-size="10">T</tspan></text>
+    <text x="440" y="126" font-size="22" class="muted-t">⋯</text>
+  </g>
+  <g stroke="var(--s2)" stroke-width="2.2" fill="none">
+    <line x1="86" y1="120" x2="162" y2="120" marker-end="url(#p04f6)"/>
+    <line x1="216" y1="120" x2="292" y2="120" marker-end="url(#p04f6)"/>
+    <line x1="346" y1="120" x2="412" y2="120" marker-end="url(#p04f6)"/>
+    <line x1="470" y1="120" x2="532" y2="120" marker-end="url(#p04f6)"/>
+    <line x1="586" y1="120" x2="662" y2="120" marker-end="url(#p04f6)"/>
+  </g>
+  <g stroke="var(--s7)" stroke-width="1.8" fill="none">
+    <line x1="124" y1="40" x2="124" y2="106" marker-end="url(#p04f6g)"/>
+    <line x1="254" y1="40" x2="254" y2="106" marker-end="url(#p04f6g)"/>
+    <line x1="624" y1="40" x2="624" y2="106" marker-end="url(#p04f6g)"/>
+  </g>
+  <g font-size="12.5" text-anchor="middle">
+    <text x="124" y="32" style="fill:var(--s7)">ε<tspan baseline-shift="sub" font-size="10">1</tspan></text><text x="254" y="32" style="fill:var(--s7)">ε<tspan baseline-shift="sub" font-size="10">2</tspan></text><text x="624" y="32" style="fill:var(--s7)">ε<tspan baseline-shift="sub" font-size="10">T</tspan></text>
+    <text x="124" y="146" style="fill:var(--s2)" font-weight="700">q(X<tspan baseline-shift="sub" font-size="10">1</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+    <text x="254" y="146" style="fill:var(--s2)" font-weight="700">q(X<tspan baseline-shift="sub" font-size="10">2</tspan>|X<tspan baseline-shift="sub" font-size="10">1</tspan>)</text>
+    <text x="624" y="146" style="fill:var(--s2)" font-weight="700">q(X<tspan baseline-shift="sub" font-size="10">T</tspan>|X<tspan baseline-shift="sub" font-size="10">T−1</tspan>)</text>
+    <text x="60" y="170" class="muted-t">clean data</text>
+    <text x="690" y="170" class="muted-t">≈ N(0, I)</text>
+    <text x="380" y="208" font-size="13.5" font-weight="700">X<tspan baseline-shift="sub" font-size="10">t</tspan> = √α<tspan baseline-shift="sub" font-size="10">t</tspan> · X<tspan baseline-shift="sub" font-size="10">t−1</tspan> + √(1 − α<tspan baseline-shift="sub" font-size="10">t</tspan>) · ε<tspan baseline-shift="sub" font-size="10">t</tspan>,   α<tspan baseline-shift="sub" font-size="10">t</tspan> fixed in advance</text>
+    <text x="380" y="230" class="muted-t">no learnable parameter and no neural network anywhere in the encoding direction</text>
+  </g>
+</svg>
+<figcaption>Figure 6 — Fresh independent noise $\epsilon_t$ enters at each step; given $X_{t-1}$, nothing earlier in the chain matters for $X_t$.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Fix $X_{t-1}$ (condition on it). Then $\sqrt{\alpha_t}X_{t-1}$ is a constant vector $c$ and $X_t=c+\sqrt{1-\alpha_t}\,\epsilon_t$, with $\epsilon_t$ independent of $X_{t-1}$. <span class="why">$\epsilon_t$ is freshly sampled</span></li>
+<li>Mean and covariance: $$\mathbb E[X_t\mid X_{t-1}]=\sqrt{\alpha_t}X_{t-1},\qquad\operatorname{Cov}[X_t\mid X_{t-1}]=(1-\alpha_t)\,\operatorname{Cov}(\epsilon_t)=(1-\alpha_t)I$$ <span class="why">$\operatorname{Var}(a\epsilon)=a^2\operatorname{Var}(\epsilon)$ with $a=\sqrt{1-\alpha_t}$</span></li>
+<li>A constant plus a scaled Gaussian is Gaussian: $$q(X_t\mid X_{t-1})=\mathcal N\big(X_t;\ \sqrt{\alpha_t}\,X_{t-1},\ (1-\alpha_t)I\big)$$ <span class="why">this is a reparameterisation (proof 3) read backwards; (a) done. $\alpha_t\in(0,1)$ are schedule constants, so no $\phi$ appears</span></li>
+<li><strong>(b) Markov property.</strong> The only inputs to $X_t$ are $X_{t-1}$ and $\epsilon_t$, and $\epsilon_t$ is independent of $X_0,\dots,X_{t-1}$. So $$p(X_t\mid X_{t-1},X_{t-2},\dots,X_0)=p(X_t\mid X_{t-1})$$ <span class="why">first-order Markov chain by construction</span></li>
+<li><strong>(c) Fixed point</strong> (step filled in). Suppose $X_{t-1}\sim\mathcal N(0,I)$, independent of $\epsilon_t\sim\mathcal N(0,I)$. A sum of independent Gaussians is Gaussian with mean $0$ and covariance $$\alpha_t I+(1-\alpha_t)I=I$$ <span class="why">variances add for independent terms</span></li>
+<li>So $\mathcal N(0,I)$ is preserved by every step: this is why the $\sqrt{\alpha_t}$ scaling is there. Adding noise <em>without</em> shrinking the signal would give variance $1+(1-\alpha_t)>1$ and the chain would blow up instead of settling. With scaling, the mean of $X_T$ carries the factor $\prod_t\sqrt{\alpha_t}\,X_0\to0$ (each $\alpha_t<1$) and the variance tends to $1$, so $X_T\approx\mathcal N(0,I)$ regardless of $X_0$. <span class="why">the professor's answer to "why scale at all?"</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>$\alpha_t=0.9$, $X_{t-1}=2$ (scalar). Conditional law: mean $\sqrt{0.9}\cdot2=1.8974$, variance $0.1$ (sd $0.3162$). With a draw $\epsilon_t=-0.5$: $X_t=1.8974-0.5\cdot0.3162=1.7393$.</p>
+<p>Fixed point: if $X_{t-1}\sim\mathcal N(0,1)$ then $\operatorname{Var}(X_t)=0.9\cdot1+0.1=1$. &#10003;</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>DDPM = hierarchical VAE with three constraints: $T$ latents, <strong>every latent has the dimensionality of the data</strong>, and a <strong>fixed (non-learned) encoding process</strong>. Only the decoder has parameters $\theta$.</li>
+<li>Notation switch: data is $X_0$, latents are $X_1,\dots,X_T$ (of <em>one</em> data point, not different data points). $\alpha_t$ is a fixed schedule; $T$ is a hyperparameter (order of a thousand).</li>
+<li>The forward process is <strong>degradation, not augmentation</strong>; learning is entirely in the reverse direction.</li>
+<li>Every equation is written per data point; batching only matters in implementation.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Reading $q(X_t\mid X_{t-1})$ as having learned parameters ("$q_\phi$"). The encoding distribution carries no $\phi$ subscript; in the ELBO only $p_\theta$ is learned.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="ddpm-factor" class="proof-head">7. The two joint factorisations</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>$q(X_{1:T}\mid X_0)=\prod_{t=1}^{T}q(X_t\mid X_{t-1})$ (derived: chain rule + Markov) and $p_\theta(X_{0:T})=p(X_T)\prod_{t=1}^{T}p_\theta(X_{t-1}\mid X_t)$ (defined: the model), with Gaussian reverse conditionals $\mathcal N(X_{t-1};\mu_\theta(X_t),\Sigma_\theta(X_t))$. <em>Source:</em> 19 Sept class ("Chain Rule Expansion of the Joint Encoding Distribution", "Defining the Model: the Reverse Process"); restated in the 3 Oct recap and 3 Oct tutorial. <em>Used later:</em> numerator and denominator of the DDPM ELBO.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 270" style="max-width:100%;height:auto" role="img" aria-label="Chain with forward arrows q, reverse arrows p_theta, and dropped skip edges removed by the Markov property">
+  <defs>
+    <marker id="p04f7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s2)"/></marker>
+    <marker id="p04f7b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s1)"/></marker>
+    <marker id="p04f7r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s8)"/></marker>
+  </defs>
+  <g font-size="14" text-anchor="middle">
+    <circle cx="90" cy="140" r="24" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="90" y="145">X<tspan baseline-shift="sub" font-size="10">0</tspan></text>
+    <circle cx="270" cy="140" r="24" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="270" y="145">X<tspan baseline-shift="sub" font-size="10">1</tspan></text>
+    <circle cx="450" cy="140" r="24" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="450" y="145">X<tspan baseline-shift="sub" font-size="10">2</tspan></text>
+    <circle cx="630" cy="140" r="24" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="630" y="145">X<tspan baseline-shift="sub" font-size="10">3</tspan></text>
+  </g>
+  <g stroke="var(--s2)" stroke-width="2.2" fill="none">
+    <line x1="116" y1="130" x2="242" y2="130" marker-end="url(#p04f7)"/>
+    <line x1="296" y1="130" x2="422" y2="130" marker-end="url(#p04f7)"/>
+    <line x1="476" y1="130" x2="602" y2="130" marker-end="url(#p04f7)"/>
+  </g>
+  <g stroke="var(--s1)" stroke-width="2.2" fill="none">
+    <line x1="602" y1="152" x2="476" y2="152" marker-end="url(#p04f7b)"/>
+    <line x1="422" y1="152" x2="296" y2="152" marker-end="url(#p04f7b)"/>
+    <line x1="242" y1="152" x2="116" y2="152" marker-end="url(#p04f7b)"/>
+  </g>
+  <g stroke="var(--s8)" stroke-width="1.8" stroke-dasharray="5 4" fill="none">
+    <path d="M100,114 Q270,40 440,114" marker-end="url(#p04f7r)"/>
+    <path d="M280,114 Q450,40 620,114" marker-end="url(#p04f7r)"/>
+  </g>
+  <g font-size="22" font-weight="700" text-anchor="middle"><text x="270" y="68" style="fill:var(--s8)">✕</text><text x="450" y="68" style="fill:var(--s8)">✕</text></g>
+  <g font-size="12.5" text-anchor="middle">
+    <text x="180" y="120" style="fill:var(--s2)" font-weight="700">q(X<tspan baseline-shift="sub" font-size="10">1</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+    <text x="360" y="120" style="fill:var(--s2)" font-weight="700">q(X<tspan baseline-shift="sub" font-size="10">2</tspan>|X<tspan baseline-shift="sub" font-size="10">1</tspan>)</text>
+    <text x="540" y="120" style="fill:var(--s2)" font-weight="700">q(X<tspan baseline-shift="sub" font-size="10">3</tspan>|X<tspan baseline-shift="sub" font-size="10">2</tspan>)</text>
+    <text x="180" y="176" style="fill:var(--s1)" font-weight="700">p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">0</tspan>|X<tspan baseline-shift="sub" font-size="10">1</tspan>)</text>
+    <text x="360" y="176" style="fill:var(--s1)" font-weight="700">p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">1</tspan>|X<tspan baseline-shift="sub" font-size="10">2</tspan>)</text>
+    <text x="540" y="176" style="fill:var(--s1)" font-weight="700">p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">2</tspan>|X<tspan baseline-shift="sub" font-size="10">3</tspan>)</text>
+    <text x="360" y="42" style="fill:var(--s8)" font-weight="700">Markov: X<tspan baseline-shift="sub" font-size="10">2</tspan> ⟂ X<tspan baseline-shift="sub" font-size="10">0</tspan> | X<tspan baseline-shift="sub" font-size="10">1</tspan> drops these</text>
+    <text x="630" y="190" class="muted-t">prior p(X<tspan baseline-shift="sub" font-size="10">3</tspan>)</text>
+    <text x="270" y="228" class="muted-t">top: q(X<tspan baseline-shift="sub" font-size="10">1:3</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>) = q(X<tspan baseline-shift="sub" font-size="10">1</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>) q(X<tspan baseline-shift="sub" font-size="10">2</tspan>|X<tspan baseline-shift="sub" font-size="10">1</tspan>) q(X<tspan baseline-shift="sub" font-size="10">3</tspan>|X<tspan baseline-shift="sub" font-size="10">2</tspan>)</text>
+    <text x="270" y="248" class="muted-t">bottom: p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">0:3</tspan>) = p(X<tspan baseline-shift="sub" font-size="10">3</tspan>) p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">2</tspan>|X<tspan baseline-shift="sub" font-size="10">3</tspan>) p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">1</tspan>|X<tspan baseline-shift="sub" font-size="10">2</tspan>) p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">0</tspan>|X<tspan baseline-shift="sub" font-size="10">1</tspan>)</text>
+  </g>
+</svg>
+<figcaption>Figure 7 — Encoder chain (orange, fixed) and decoder chain (blue, learned) on $T=3$. The chain rule would allow arrows from every earlier variable (red dashed); the Markov property removes them.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Order the latents $X_1,\dots,X_T$ and apply the chain rule of probability, conditioning everything on $X_0$: $$q(X_{1:T}\mid X_0)=\prod_{t=1}^{T}q(X_t\mid X_{t-1},X_{t-2},\dots,X_1,X_0)$$ <span class="why">chain rule of probability</span></li>
+<li>Written out for $T=3$: $$q(X_1\mid X_0)\;q(X_2\mid X_1,X_0)\;q(X_3\mid X_2,X_1,X_0)$$ <span class="why">same chain rule, explicit</span></li>
+<li>Each conditional depends only on the immediately preceding variable (proof 6b): $$q(X_t\mid X_{t-1},\dots,X_0)=q(X_t\mid X_{t-1})$$ <span class="why">first-order Markov property of the forward process</span></li>
+<li>Substitute (for $T=3$: $q(X_1\mid X_0)\,q(X_2\mid X_1)\,q(X_3\mid X_2)$): $$q(X_{1:T}\mid X_0)=\prod_{t=1}^{T}q(X_t\mid X_{t-1})$$ <span class="why">steps 1 and 3</span></li>
+<li><strong>Model joint (a definition, not a derivation).</strong> The decoder is chosen as the mirror-image chain started from the prior: $$p_\theta(X_{0:T})=p(X_T)\prod_{t=1}^{T}p_\theta(X_{t-1}\mid X_t),\qquad p(X_T)=\mathcal N(0,I)$$ <span class="why">modelling choice: reverse chain is also first-order Markov</span></li>
+<li>Each reverse step is a Gaussian with learned mean and variance, one per step $t$ (in practice produced by one network conditioned on $t$): $$p_\theta(X_{t-1}\mid X_t)=\mathcal N\big(X_{t-1};\ \mu_\theta(X_t,t),\ \Sigma_\theta(X_t,t)\big)$$ <span class="why">the only learnable objects in the whole model</span></li>
+<li>(step filled in) Sanity check that $p_\theta(X_{0:T})$ is a normalised density: integrate out $X_0$ first, $\int p_\theta(X_0\mid X_1)dX_0=1$; then $X_1$, $\int p_\theta(X_1\mid X_2)dX_1=1$; and so on down to $\int p(X_T)dX_T=1$. <span class="why">each conditional integrates to 1 over its left variable</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Schedule $\alpha=(0.9,0.8,0.7)$, scalar $X_0=1$, one trajectory $X=(1,\ 0.7,\ 0.5,\ 0.2)$. Each factor is a Gaussian density $\mathcal N(X_t;\sqrt{\alpha_t}X_{t-1},1-\alpha_t)$:</p>
+<p>$q(X_1\mid X_0)=\mathcal N(0.7;0.9487,0.1)=0.9260$, $\ q(X_2\mid X_1)=\mathcal N(0.5;0.7155,0.2)=0.8573$, $\ q(X_3\mid X_2)=\mathcal N(0.2;0.4183,0.3)=0.6727$.</p>
+<p>Joint $=0.9260\times0.8573\times0.6727=0.5341$: the density of this whole trajectory is just the product of three one-step densities, with no extra conditioning variables needed.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Say both words: <strong>chain rule</strong> gives the full product, the <strong>Markov property</strong> shortens every conditional to depend on the previous variable only.</li>
+<li>$q$ has no $\phi$; $p_\theta$ has $\theta$. The reverse conditionals have separate (learned) mean and variance for every $t$.</li>
+<li>First-order Markov: $X_t\perp\{X_0,\dots,X_{t-2}\}\mid X_{t-1}$.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Using the same Markov argument to shorten $q(X_{t-1}\mid X_t,X_0)$. The forward chain gives independence in the forward direction only; see proof 10.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="ddpm-elbo-start" class="proof-head">8. DDPM ELBO, stage 1: Jensen and expanding the logs</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>$\log p_\theta(X_0)\ge J(\theta)=\mathbb E_{q(X_{1:T}\mid X_0)}\Big[\log p(X_T)+\log p_\theta(X_0\mid X_1)-\log q(X_1\mid X_0)+\sum_{t=2}^{T}\log p_\theta(X_{t-1}\mid X_t)-\sum_{t=2}^{T}\log q(X_t\mid X_{t-1})\Big]$. <em>Source:</em> 19 Sept class, "Starting the ELBO Construction for DDPM"; 3 Oct class, "Constructing the DDPM ELBO". Proof 1 with $x\to X_0$, $z\to X_{1:T}$. <em>Used later:</em> start of the five-stage proof; stages 2–5 below finish it.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 270" style="max-width:100%;height:auto" role="img" aria-label="ELBO integrand as a ratio: numerator is the reverse chain, denominator is the forward chain, link t=1 pulled out">
+  <defs>
+    <marker id="p04f8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s2)"/></marker>
+    <marker id="p04f8b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s1)"/></marker>
+  </defs>
+  <text x="380" y="20" text-anchor="middle" font-size="13.5" font-weight="700">J(θ) = E over q of  log [ p(X<tspan baseline-shift="sub" font-size="10">T</tspan>) ∏ p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">t−1</tspan>|X<tspan baseline-shift="sub" font-size="10">t</tspan>)  /  ∏ q(X<tspan baseline-shift="sub" font-size="10">t</tspan>|X<tspan baseline-shift="sub" font-size="10">t−1</tspan>) ]</text>
+  <g font-size="14" text-anchor="middle">
+    <circle cx="70" cy="130" r="24" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="70" y="135">X<tspan baseline-shift="sub" font-size="10">0</tspan></text>
+    <circle cx="200" cy="130" r="24" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="200" y="135">X<tspan baseline-shift="sub" font-size="10">1</tspan></text>
+    <circle cx="330" cy="130" r="24" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="330" y="135">X<tspan baseline-shift="sub" font-size="10">2</tspan></text>
+    <circle cx="560" cy="130" r="24" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="560" y="135">X<tspan baseline-shift="sub" font-size="10">T−1</tspan></text>
+    <circle cx="690" cy="130" r="24" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="690" y="135">X<tspan baseline-shift="sub" font-size="10">T</tspan></text>
+    <text x="445" y="136" font-size="22" class="muted-t">⋯</text>
+  </g>
+  <g stroke="var(--s2)" stroke-width="2.2" fill="none">
+    <line x1="96" y1="120" x2="172" y2="120" marker-end="url(#p04f8)"/><line x1="226" y1="120" x2="302" y2="120" marker-end="url(#p04f8)"/><line x1="356" y1="120" x2="412" y2="120" marker-end="url(#p04f8)"/><line x1="478" y1="120" x2="532" y2="120" marker-end="url(#p04f8)"/><line x1="586" y1="120" x2="662" y2="120" marker-end="url(#p04f8)"/>
+  </g>
+  <g stroke="var(--s1)" stroke-width="2.2" fill="none">
+    <line x1="172" y1="142" x2="96" y2="142" marker-end="url(#p04f8b)"/><line x1="302" y1="142" x2="226" y2="142" marker-end="url(#p04f8b)"/><line x1="412" y1="142" x2="356" y2="142" marker-end="url(#p04f8b)"/><line x1="532" y1="142" x2="478" y2="142" marker-end="url(#p04f8b)"/><line x1="662" y1="142" x2="586" y2="142" marker-end="url(#p04f8b)"/>
+  </g>
+  <rect x="14" y="164" width="226" height="48" rx="8" fill="var(--accent-soft)" stroke="var(--s3)" stroke-width="2"/>
+  <text x="127" y="184" text-anchor="middle" font-size="12.5" font-weight="700">t = 1 pulled out</text>
+  <text x="127" y="200" text-anchor="middle" font-size="11.5">log p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">0</tspan>|X<tspan baseline-shift="sub" font-size="10">1</tspan>) − log q(X<tspan baseline-shift="sub" font-size="10">1</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+  <rect x="256" y="164" width="300" height="48" rx="8" fill="var(--surface-2)" stroke="var(--s2)"/>
+  <text x="406" y="184" text-anchor="middle" font-size="12.5" font-weight="700">t = 2 … T keep the ratio</text>
+  <text x="406" y="200" text-anchor="middle" font-size="11.5">Σ [ log p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">t−1</tspan>|X<tspan baseline-shift="sub" font-size="10">t</tspan>) − log q(X<tspan baseline-shift="sub" font-size="10">t</tspan>|X<tspan baseline-shift="sub" font-size="10">t−1</tspan>) ]</text>
+  <rect x="610" y="164" width="140" height="48" rx="8" fill="var(--surface-2)" stroke="var(--s7)"/>
+  <text x="680" y="184" text-anchor="middle" font-size="12.5" font-weight="700">prior node</text>
+  <text x="680" y="200" text-anchor="middle" font-size="11.5">log p(X<tspan baseline-shift="sub" font-size="10">T</tspan>)</text>
+  <text x="380" y="240" text-anchor="middle" font-size="12.5" class="muted-t">orange = encoder links in the denominator, blue = decoder links in the numerator; each log of a product is a sum of per-link logs</text>
+</svg>
+<figcaption>Figure 8 — The ELBO integrand is one big ratio of two chains. The $t=1$ link is separated because it contains $X_0$ as its left end; the rest still have the forward conditional $q(X_t\mid X_{t-1})$ in the denominator.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Marginalise out the latents: $$\log p_\theta(X_0)=\log\int p_\theta(X_{0:T})\,dX_{1:T}$$ <span class="why">latent-variable model, $Z=X_{1:T}$</span></li>
+<li>Multiply and divide by the (fixed) forward joint: $$=\log\int q(X_{1:T}\mid X_0)\frac{p_\theta(X_{0:T})}{q(X_{1:T}\mid X_0)}\,dX_{1:T}=\log\mathbb E_{q(X_{1:T}\mid X_0)}\!\left[\frac{p_\theta(X_{0:T})}{q(X_{1:T}\mid X_0)}\right]$$ <span class="why">multiply-and-divide; definition of expectation</span></li>
+<li>$$\log p_\theta(X_0)\ \ge\ J(\theta):=\mathbb E_{q(X_{1:T}\mid X_0)}\!\left[\log\frac{p_\theta(X_{0:T})}{q(X_{1:T}\mid X_0)}\right]$$ <span class="why">Jensen (note: no $\phi$ anywhere, since the encoder is fixed)</span></li>
+<li>Insert both factorisations (proof 7): $$J(\theta)=\mathbb E_q\!\left[\log\frac{p(X_T)\prod_{t=1}^{T}p_\theta(X_{t-1}\mid X_t)}{\prod_{t=1}^{T}q(X_t\mid X_{t-1})}\right]$$ <span class="why">numerator = reverse chain, denominator = forward chain</span></li>
+<li>Logs turn products into sums: $$J(\theta)=\mathbb E_q\Big[\log p(X_T)+\sum_{t=1}^{T}\log p_\theta(X_{t-1}\mid X_t)-\sum_{t=1}^{T}\log q(X_t\mid X_{t-1})\Big]$$ <span class="why">$\log\frac{ab}{c}=\log a+\log b-\log c$</span></li>
+<li>Peel the $t=1$ term off each sum: $$J(\theta)=\mathbb E_q\Big[\log p(X_T)+\log p_\theta(X_0\mid X_1)-\log q(X_1\mid X_0)\Big]$$ $$\qquad+\ \mathbb E_q\Big[\sum_{t=2}^{T}\log p_\theta(X_{t-1}\mid X_t)-\sum_{t=2}^{T}\log q(X_t\mid X_{t-1})\Big]$$ <span class="why">splitting a sum; these are exactly the five groups of terms in the statement</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Notation flags the professor gave: the encoder has <strong>no $\phi$</strong>, the decoder keeps $\theta$ — all learning is in the decoding process.</li>
+<li>The professor previewed the destination: after "a lot of algebra" the loss becomes "a simple regression problem" (that last reduction is the next page).</li>
+<li>Same ELBO template as the VAE with $Z\to X_{1:T}$, $X\to X_0$.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Dropping the $t=1$ term of the forward denominator or the $t=1$ term of the reverse product when splitting sums. Both are needed: the first becomes the reconstruction term, the second cancels in stage 4.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="ddpm-survive" class="proof-head">9. DDPM ELBO, stage 2: which variables survive each expectation</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>If $g$ depends only on a subset of the variables, an expectation over the full joint equals an expectation over that subset's marginal: $\mathbb E_{q(X_{1:T}\mid X_0)}[g]=\mathbb E_{q(X_a,X_b\mid X_0)}[g(X_a,X_b)]$; and for pairs, $\mathbb E_{q(X_{t-1},X_t\mid X_0)}[f]=\mathbb E_{q(X_t\mid X_0)}\big[\mathbb E_{q(X_{t-1}\mid X_t,X_0)}[f]\big]$. <em>Source:</em> 19 Sept class "Simplifying the ELBO: Which Variables Survive Each Expectation" (the nesting identity is Homework 11); 3 Oct class "Expectation Reduction"; 3 Oct tutorial "Why nested expectations are required". <em>Used later:</em> stage 5.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 300" style="max-width:100%;height:auto" role="img" aria-label="Three copies of the chain, each highlighting only the variables one term depends on">
+  <g font-size="12" text-anchor="middle">
+    <text x="130" y="20" font-size="13.5" font-weight="700">log p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">0</tspan>|X<tspan baseline-shift="sub" font-size="10">1</tspan>)</text>
+    <text x="380" y="20" font-size="13.5" font-weight="700">log p(X<tspan baseline-shift="sub" font-size="10">T</tspan>) − log q(X<tspan baseline-shift="sub" font-size="10">T</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+    <text x="630" y="20" font-size="13.5" font-weight="700">log p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">t−1</tspan>|X<tspan baseline-shift="sub" font-size="10">t</tspan>) / q(X<tspan baseline-shift="sub" font-size="10">t−1</tspan>|X<tspan baseline-shift="sub" font-size="10">t</tspan>,X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+  </g>
+  <g stroke="var(--text-3)" stroke-width="1.5" fill="none">
+    <line x1="48" y1="86" x2="212" y2="86"/><line x1="298" y1="86" x2="462" y2="86"/><line x1="548" y1="86" x2="712" y2="86"/>
+  </g>
+  <g font-size="12" text-anchor="middle">
+    <circle cx="56" cy="86" r="17" fill="var(--s1)" fill-opacity="0.9" stroke="var(--s1)"/><text x="56" y="90" style="fill:#fff">X<tspan baseline-shift="sub" font-size="10">0</tspan></text>
+    <circle cx="105" cy="86" r="17" fill="var(--s1)" fill-opacity="0.9" stroke="var(--s1)"/><text x="105" y="90" style="fill:#fff">X<tspan baseline-shift="sub" font-size="10">1</tspan></text>
+    <circle cx="154" cy="86" r="17" fill="var(--surface-2)" stroke="var(--text-3)"/><text x="154" y="90" class="muted-t">X<tspan baseline-shift="sub" font-size="10">2</tspan></text>
+    <circle cx="203" cy="86" r="17" fill="var(--surface-2)" stroke="var(--text-3)"/><text x="203" y="90" class="muted-t">X<tspan baseline-shift="sub" font-size="10">T</tspan></text>
+
+    <circle cx="306" cy="86" r="17" fill="var(--s3)" fill-opacity="0.85" stroke="var(--s3)"/><text x="306" y="90" style="fill:#fff">X<tspan baseline-shift="sub" font-size="10">0</tspan></text>
+    <circle cx="355" cy="86" r="17" fill="var(--surface-2)" stroke="var(--text-3)"/><text x="355" y="90" class="muted-t">X<tspan baseline-shift="sub" font-size="10">1</tspan></text>
+    <circle cx="404" cy="86" r="17" fill="var(--surface-2)" stroke="var(--text-3)"/><text x="404" y="90" class="muted-t">X<tspan baseline-shift="sub" font-size="10">2</tspan></text>
+    <circle cx="453" cy="86" r="17" fill="var(--s1)" fill-opacity="0.9" stroke="var(--s1)"/><text x="453" y="90" style="fill:#fff">X<tspan baseline-shift="sub" font-size="10">T</tspan></text>
+
+    <circle cx="556" cy="86" r="17" fill="var(--s3)" fill-opacity="0.85" stroke="var(--s3)"/><text x="556" y="90" style="fill:#fff">X<tspan baseline-shift="sub" font-size="10">0</tspan></text>
+    <circle cx="605" cy="86" r="17" fill="var(--surface-2)" stroke="var(--text-3)"/><text x="605" y="90" class="muted-t">X<tspan baseline-shift="sub" font-size="10">1</tspan></text>
+    <circle cx="654" cy="86" r="17" fill="var(--s1)" fill-opacity="0.9" stroke="var(--s1)"/><text x="654" y="90" style="fill:#fff">X<tspan baseline-shift="sub" font-size="10">t−1</tspan></text>
+    <circle cx="703" cy="86" r="17" fill="var(--s1)" fill-opacity="0.9" stroke="var(--s1)"/><text x="703" y="90" style="fill:#fff">X<tspan baseline-shift="sub" font-size="10">t</tspan></text>
+  </g>
+  <g font-size="12.5" text-anchor="middle">
+    <text x="130" y="134" font-weight="700">survives: X<tspan baseline-shift="sub" font-size="10">1</tspan> (X<tspan baseline-shift="sub" font-size="10">0</tspan> given)</text>
+    <text x="130" y="154">E over q(X<tspan baseline-shift="sub" font-size="10">1</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+    <text x="380" y="134" font-weight="700">survives: X<tspan baseline-shift="sub" font-size="10">T</tspan> (X<tspan baseline-shift="sub" font-size="10">0</tspan> given)</text>
+    <text x="380" y="154">E over q(X<tspan baseline-shift="sub" font-size="10">T</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+    <text x="630" y="134" font-weight="700">survive: X<tspan baseline-shift="sub" font-size="10">t−1</tspan>, X<tspan baseline-shift="sub" font-size="10">t</tspan></text>
+    <text x="630" y="154">E over q(X<tspan baseline-shift="sub" font-size="10">t−1</tspan>, X<tspan baseline-shift="sub" font-size="10">t</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+  </g>
+  <rect x="470" y="176" width="270" height="60" rx="8" fill="var(--accent-soft)" stroke="var(--s3)"/>
+  <text x="605" y="198" text-anchor="middle" font-size="12.5" font-weight="700">tower step for the pair</text>
+  <text x="605" y="218" text-anchor="middle" font-size="12">E over q(X<tspan baseline-shift="sub" font-size="10">t</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>) [ E over q(X<tspan baseline-shift="sub" font-size="10">t−1</tspan>|X<tspan baseline-shift="sub" font-size="10">t</tspan>,X<tspan baseline-shift="sub" font-size="10">0</tspan>) [ · ] ]</text>
+  <text x="380" y="262" text-anchor="middle" font-size="12.5" class="muted-t">blue = variable the term depends on (kept); green = conditioning data point;</text>
+  <text x="380" y="280" text-anchor="middle" font-size="12.5" class="muted-t">grey = integrated away (its density integrates to 1)</text>
+</svg>
+<figcaption>Figure 9 — Each of the three groups of terms from stage 1 touches only two variables at most; the other $T-2$ integrals evaluate to $1$ and disappear.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Let $g$ depend only on $X_a,X_b$ (two of the latents). Write the expectation as an integral over all latents: $$\mathbb E_{q(X_{1:T}\mid X_0)}[g]=\int q(X_{1:T}\mid X_0)\,g(X_a,X_b)\,dX_{1:T}$$ <span class="why">definition of expectation</span></li>
+<li>Separate the variables the integrand does not use: $$=\int g(X_a,X_b)\Big[\int q(X_{1:T}\mid X_0)\,dX_{\text{others}}\Big]dX_a\,dX_b$$ <span class="why">Fubini; $g$ is constant in $X_{\text{others}}$</span></li>
+<li>The bracket is the marginal of $(X_a,X_b)$ given $X_0$: $$\int q(X_{1:T}\mid X_0)\,dX_{\text{others}}=q(X_a,X_b\mid X_0)$$ <span class="why">definition of a marginal (integrating other variables out)</span></li>
+<li>Therefore $\mathbb E_{q(X_{1:T}\mid X_0)}[g]=\mathbb E_{q(X_a,X_b\mid X_0)}[g]$. Apply it to the three groups of stage 1: $$\log p_\theta(X_0\mid X_1)\ \to\ q(X_1\mid X_0),\qquad\log p(X_T)\ \to\ q(X_T\mid X_0)$$ $$\text{terms in }(X_{t-1},X_t)\ \to\ q(X_{t-1},X_t\mid X_0)$$ <span class="why">each term's argument list</span></li>
+<li><strong>Nesting identity.</strong> Product rule for the pair: $$q(X_{t-1},X_t\mid X_0)=q(X_t\mid X_0)\;q(X_{t-1}\mid X_t,X_0)$$ <span class="why">product rule of probability (conditioned on $X_0$)</span></li>
+<li>Insert into the pair expectation of any $f(X_{t-1},X_t)$: $$\mathbb E_{q(X_{t-1},X_t\mid X_0)}[f]=\int q(X_t\mid X_0)\Big[\int q(X_{t-1}\mid X_t,X_0)\,f\,dX_{t-1}\Big]dX_t$$ $$=\mathbb E_{q(X_t\mid X_0)}\Big[\mathbb E_{q(X_{t-1}\mid X_t,X_0)}[f]\Big]$$ <span class="why">tower property / law of iterated expectation (Homework 11)</span></li>
+<li>The inner expectation is over exactly the distribution that will sit in the numerator of the log-ratio — this is what lets us <em>recognise a KL</em> in stage 5. Without the nesting, both $X_{t-1}$ and $X_t$ would be random with no KL in sight. <span class="why">motivation for the nested form</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Two binary variables $(A,B)$ standing for $(X_{t-1},X_t)$: $P(0,0)=0.1,\ P(0,1)=0.3,\ P(1,0)=0.2,\ P(1,1)=0.4$.</p>
+<p><strong>Survival:</strong> $g=A+1$. Via the joint: $0.1\cdot1+0.3\cdot1+0.2\cdot2+0.4\cdot2=1.6$. Via the marginal $P(A{=}1)=0.6$: $0.4\cdot1+0.6\cdot2=1.6$. &#10003;</p>
+<p><strong>Nesting:</strong> $f=A+B$. Joint: $0\cdot0.1+1\cdot0.3+1\cdot0.2+2\cdot0.4=1.3$. Nested: $P(B{=}0)=0.3$, $\mathbb E[A\mid B{=}0]=0.2/0.3=0.667$; $P(B{=}1)=0.7$, $\mathbb E[A\mid B{=}1]=0.4/0.7=0.571$. Then $\mathbb E_B\big[\mathbb E[A\mid B]+B\big]=0.3\cdot0.667+0.7\cdot0.571+0.7=0.2+0.4+0.7=1.3$. &#10003;</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Rule in the professor's words: <strong>only the variables the function depends on "survive"; every other variable marginalises away.</strong></li>
+<li>Survivors: $\log p_\theta(X_0\mid X_1)\to X_1$; $\log p(X_T)\to X_T$; each ratio term $\to(X_{t-1},X_t)$, and the nesting (Homework 11) turns the pair into $\mathbb E_{q(X_t\mid X_0)}\mathbb E_{q(X_{t-1}\mid X_t,X_0)}$.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Forgetting that every distribution stays <em>conditioned on $X_0$</em> after marginalising, and writing $q(X_t)$ instead of $q(X_t\mid X_0)$.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="ddpm-bayes" class="proof-head">10. DDPM ELBO, stage 3: the three-variable Bayes-rule trick</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>For $t\ge2$: $q(X_t\mid X_{t-1})=q(X_t\mid X_{t-1},X_0)=\dfrac{q(X_{t-1}\mid X_t,X_0)\,q(X_t\mid X_0)}{q(X_{t-1}\mid X_0)}$. <em>Source:</em> 19 Sept class, "The Three-Variable Bayes-Rule Trick: Anchoring the Forward Process on $X_0$" ("the most important trick; everything else is just algebra"); 3 Oct class "Bayes-Rule Reparameterization" (same derivation, equivalent form). <em>Used later:</em> produces the known denoising distribution $q(X_{t-1}\mid X_t,X_0)$ that appears in the last term of the loss.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 330" style="max-width:100%;height:auto" role="img" aria-label="Left graph: forward chain X0 to Xt-1 to Xt, skip edge crossed out by Markov. Right graph: posterior has both Xt and X0 pointing to Xt-1. Below the identity as coloured blocks">
+  <defs>
+    <marker id="p04f10" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s2)"/></marker>
+    <marker id="p04f10g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s3)"/></marker>
+    <marker id="p04f10r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s8)"/></marker>
+  </defs>
+  <text x="180" y="20" text-anchor="middle" font-size="13.5" font-weight="700">Forward direction (Markov)</text>
+  <text x="580" y="20" text-anchor="middle" font-size="13.5" font-weight="700">Reversed, given X<tspan baseline-shift="sub" font-size="10">0</tspan> (no Markov shortcut)</text>
+  <line x1="380" y1="30" x2="380" y2="196" stroke="var(--text-3)" stroke-dasharray="3 4"/>
+  <g font-size="13" text-anchor="middle">
+    <circle cx="50" cy="120" r="22" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="50" y="125">X<tspan baseline-shift="sub" font-size="10">0</tspan></text>
+    <circle cx="180" cy="120" r="22" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="180" y="125">X<tspan baseline-shift="sub" font-size="10">t−1</tspan></text>
+    <circle cx="310" cy="120" r="22" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="310" y="125">X<tspan baseline-shift="sub" font-size="10">t</tspan></text>
+    <circle cx="440" cy="120" r="22" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="440" y="125">X<tspan baseline-shift="sub" font-size="10">0</tspan></text>
+    <circle cx="570" cy="80" r="22" fill="var(--s3)" fill-opacity="0.35" stroke="var(--s3)" stroke-width="2"/><text x="570" y="85">X<tspan baseline-shift="sub" font-size="10">t−1</tspan></text>
+    <circle cx="700" cy="120" r="22" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="700" y="125">X<tspan baseline-shift="sub" font-size="10">t</tspan></text>
+  </g>
+  <g stroke="var(--s2)" stroke-width="2.2" fill="none">
+    <line x1="73" y1="120" x2="155" y2="120" marker-end="url(#p04f10)"/>
+    <line x1="203" y1="120" x2="285" y2="120" marker-end="url(#p04f10)"/>
+  </g>
+  <path d="M62,100 Q180,30 300,100" fill="none" stroke="var(--s8)" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#p04f10r)"/>
+  <text x="180" y="58" text-anchor="middle" font-size="20" font-weight="700" style="fill:var(--s8)">✕</text>
+  <text x="180" y="168" text-anchor="middle" font-size="12.5" class="muted-t">X<tspan baseline-shift="sub" font-size="10">0</tspan> adds nothing once X<tspan baseline-shift="sub" font-size="10">t−1</tspan> is known:</text>
+  <text x="180" y="186" text-anchor="middle" font-size="12.5" class="muted-t">q(X<tspan baseline-shift="sub" font-size="10">t</tspan>|X<tspan baseline-shift="sub" font-size="10">t−1</tspan>) = q(X<tspan baseline-shift="sub" font-size="10">t</tspan>|X<tspan baseline-shift="sub" font-size="10">t−1</tspan>, X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+  <g stroke="var(--s3)" stroke-width="2.2" fill="none">
+    <line x1="461" y1="108" x2="548" y2="90" marker-end="url(#p04f10g)"/>
+    <line x1="680" y1="108" x2="592" y2="90" marker-end="url(#p04f10g)"/>
+  </g>
+  <text x="580" y="168" text-anchor="middle" font-size="12.5" class="muted-t">both X<tspan baseline-shift="sub" font-size="10">t</tspan> and X<tspan baseline-shift="sub" font-size="10">0</tspan> inform X<tspan baseline-shift="sub" font-size="10">t−1</tspan>:</text>
+  <text x="580" y="186" text-anchor="middle" font-size="12.5" class="muted-t">q(X<tspan baseline-shift="sub" font-size="10">t−1</tspan>|X<tspan baseline-shift="sub" font-size="10">t</tspan>) ≠ q(X<tspan baseline-shift="sub" font-size="10">t−1</tspan>|X<tspan baseline-shift="sub" font-size="10">t</tspan>, X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+
+  <text x="380" y="224" text-anchor="middle" font-size="13.5" font-weight="700">Bayes rule with X<tspan baseline-shift="sub" font-size="10">0</tspan> in every conditioning bar</text>
+  <g font-size="13" text-anchor="middle">
+    <rect x="30" y="240" width="170" height="40" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="2"/><text x="115" y="265">q(X<tspan baseline-shift="sub" font-size="10">t</tspan>|X<tspan baseline-shift="sub" font-size="10">t−1</tspan>)</text>
+    <text x="222" y="266" font-size="18">=</text>
+    <rect x="244" y="240" width="190" height="40" rx="8" fill="var(--accent-soft)" stroke="var(--s3)" stroke-width="2"/><text x="339" y="265">q(X<tspan baseline-shift="sub" font-size="10">t−1</tspan>|X<tspan baseline-shift="sub" font-size="10">t</tspan>,X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+    <text x="456" y="266" font-size="18">×</text>
+    <rect x="478" y="240" width="130" height="40" rx="8" fill="var(--surface-2)" stroke="var(--s1)" stroke-width="2"/><text x="543" y="265">q(X<tspan baseline-shift="sub" font-size="10">t</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+    <text x="630" y="266" font-size="18">/</text>
+    <rect x="650" y="240" width="100" height="40" rx="8" fill="var(--surface-2)" stroke="var(--s7)" stroke-width="2"/><text x="700" y="265">q(X<tspan baseline-shift="sub" font-size="10">t−1</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+  </g>
+  <text x="339" y="304" text-anchor="middle" font-size="12" style="fill:var(--s3)" font-weight="700">known denoising (target)</text>
+  <text x="575" y="304" text-anchor="middle" font-size="12" class="muted-t">two marginals of X<tspan baseline-shift="sub" font-size="10">0</tspan>: these will telescope</text>
+</svg>
+<figcaption>Figure 10 — Left: the forward chain makes $X_0$ irrelevant for $X_t$ once $X_{t-1}$ is known, so we may insert it for free. Right: reversed, $X_0$ still matters for $X_{t-1}$. Bayes' rule links the two.</figcaption>
+</figure>
+
+<ol class="steps">
+<li><strong>Insert $X_0$ for free.</strong> By the Markov property of the forward chain ($t\ge2$, so $X_0$ is a genuine earlier variable): $$q(X_t\mid X_{t-1})=q(X_t\mid X_{t-1},X_0)$$ <span class="why">$X_t\perp X_0\mid X_{t-1}$ (proof 6b)</span></li>
+<li>Write the joint of $(X_t,X_{t-1})$ given $X_0$ in one order: $$q(X_t,X_{t-1}\mid X_0)=q(X_t\mid X_{t-1},X_0)\;q(X_{t-1}\mid X_0)$$ <span class="why">product rule</span></li>
+<li>And in the other order: $$q(X_t,X_{t-1}\mid X_0)=q(X_{t-1}\mid X_t,X_0)\;q(X_t\mid X_0)$$ <span class="why">product rule, variables swapped</span></li>
+<li>Equate steps 2 and 3 and divide by $q(X_{t-1}\mid X_0)>0$: $$q(X_t\mid X_{t-1},X_0)=\frac{q(X_{t-1}\mid X_t,X_0)\,q(X_t\mid X_0)}{q(X_{t-1}\mid X_0)}$$ <span class="why">Bayes' rule $P(A\mid B)=\frac{P(B\mid A)P(A)}{P(B)}$ with $X_0$ as a common conditioning variable (the "three-variable" version)</span></li>
+<li>Combine with step 1: $$q(X_t\mid X_{t-1})=\frac{q(X_{t-1}\mid X_t,X_0)\,q(X_t\mid X_0)}{q(X_{t-1}\mid X_0)}$$ <span class="why">steps 1 and 4</span></li>
+<li>Equivalent form used by the 3 Oct class and tutorial: $$q(X_{t-1}\mid X_t,X_0)=\frac{q(X_t\mid X_{t-1})\,q(X_{t-1}\mid X_0)}{q(X_t\mid X_0)}$$ <span class="why">rearranging step 5</span></li>
+<li><strong>Why $X_0$ cannot be dropped from the posterior.</strong> The Markov property holds only forward: $X_t\perp X_0\mid X_{t-1}$. It does not imply $X_{t-1}\perp X_0\mid X_t$: many different images can end in the same noisy $X_t$, and knowing which $X_0$ was used still changes which $X_{t-1}$ was visited. <span class="why">class Q&amp;A: why $q(X_{t-1}\mid X_t,X_0)\neq q(X_{t-1}\mid X_t)$</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Same trajectory as proof 7 ($\alpha=(0.9,0.8,0.7)$, $X=(1,0.7,0.5,0.2)$). With $\bar\alpha_t=\prod_{s\le t}\alpha_s=(0.9,\,0.72,\,0.504)$ the marginals are $q(X_t\mid X_0)=\mathcal N(X_t;\sqrt{\bar\alpha_t}X_0,1-\bar\alpha_t)$ (closed forms from the next page): $q(X_1|X_0)=0.9260$, $q(X_2|X_0)=0.6069$, $q(X_3|X_0)=0.4358$. The posteriors $q(X_{t-1}\mid X_t,X_0)$ (also from the next page) evaluate to $q(X_1|X_2,X_0)=\mathcal N(0.7;0.8374,0.0714)=1.3080$ and $q(X_2|X_3,X_0)=\mathcal N(0.5;0.6077,0.1694)=0.9368$.</p>
+<p>$t=2$: $\dfrac{1.3080\times0.6069}{0.9260}=0.8573=q(X_2\mid X_1)$. &#10003;</p>
+<p>$t=3$: $\dfrac{0.9368\times0.4358}{0.6069}=0.6727=q(X_3\mid X_2)$. &#10003;</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Two moves in order: (1) insert $X_0$ (free by Markov); (2) Bayes' rule with three variables. Say why: it anchors the process on the real data point, because the goal is to reverse the chain and land on an actual image.</li>
+<li>Name each piece: $q(X_t\mid X_0)$ = "how noisy is $X_t$ starting from $X_0$"; $q(X_{t-1}\mid X_t,X_0)$ = the new <strong>known denoising distribution</strong>, computable in closed form from the fixed forward process; it is Gaussian.</li>
+<li>Many noise paths lead from $X_0$ to the same $X_t$; conditioning on $X_0$ resolves which $X_{t-1}$ is likely.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Simplifying $q(X_{t-1}\mid X_t,X_0)$ to $q(X_{t-1}\mid X_t)$ "by Markov". The Markov chain removes $X_0$ from $q(X_t\mid X_{t-1},X_0)$, not from the reversed conditional.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="ddpm-telescope" class="proof-head">11. DDPM ELBO, stage 4: telescoping cancellation</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>$\prod_{t=2}^{T}\dfrac{q(X_{t-1}\mid X_0)}{q(X_t\mid X_0)}=\dfrac{q(X_1\mid X_0)}{q(X_T\mid X_0)}$; substituting stage 3 into the stage 1 integrand therefore gives $\log\dfrac{p(X_T)\,p_\theta(X_0\mid X_1)\prod_{t=2}^{T}p_\theta(X_{t-1}\mid X_t)}{q(X_T\mid X_0)\prod_{t=2}^{T}q(X_{t-1}\mid X_t,X_0)}$ — the forward conditionals are gone and the $q(X_1\mid X_0)$ from the first link cancels. <em>Source:</em> 19 Sept class "The Telescoping Cancellation and the Final Three-Term Loss"; 3 Oct class "Telescoping Cancellation". <em>Used later:</em> stage 5.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 330" style="max-width:100%;height:auto" role="img" aria-label="Product of ratios with intermediate terms crossed out leaving q1 over qT; log version as differences">
+  <text x="380" y="22" text-anchor="middle" font-size="13.5" font-weight="700">Write q<tspan baseline-shift="sub" font-size="10">t</tspan> for q(X<tspan baseline-shift="sub" font-size="10">t</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>), shown for T = 4</text>
+  <g font-size="17" text-anchor="middle">
+    <text x="64" y="92" font-size="40">∏</text>
+    <line x1="120" y1="78" x2="190" y2="78" stroke="var(--text)" stroke-width="1.6"/><text x="155" y="68">q<tspan baseline-shift="sub" font-size="10">1</tspan></text><text x="155" y="100">q<tspan baseline-shift="sub" font-size="10">2</tspan></text>
+    <text x="215" y="84">×</text>
+    <line x1="240" y1="78" x2="310" y2="78" stroke="var(--text)" stroke-width="1.6"/><text x="275" y="68">q<tspan baseline-shift="sub" font-size="10">2</tspan></text><text x="275" y="100">q<tspan baseline-shift="sub" font-size="10">3</tspan></text>
+    <text x="335" y="84">×</text>
+    <line x1="360" y1="78" x2="430" y2="78" stroke="var(--text)" stroke-width="1.6"/><text x="395" y="68">q<tspan baseline-shift="sub" font-size="10">3</tspan></text><text x="395" y="100">q<tspan baseline-shift="sub" font-size="10">4</tspan></text>
+    <text x="465" y="84">=</text>
+    <line x1="500" y1="78" x2="570" y2="78" stroke="var(--s3)" stroke-width="2.4"/><text x="535" y="68" style="fill:var(--s3)" font-weight="700">q<tspan baseline-shift="sub" font-size="10">1</tspan></text><text x="535" y="100" style="fill:var(--s3)" font-weight="700">q<tspan baseline-shift="sub" font-size="10">4</tspan></text>
+  </g>
+  <text x="380" y="44" text-anchor="middle" font-size="12.5" class="muted-t">the product runs over t = 2 … T</text>
+  <g stroke="var(--s8)" stroke-width="2.2" fill="none">
+    <line x1="143" y1="92" x2="167" y2="106"/><line x1="143" y1="106" x2="167" y2="92"/>
+    <line x1="263" y1="58" x2="287" y2="72"/><line x1="263" y1="72" x2="287" y2="58"/>
+    <path d="M155,110 Q215,138 275,64" stroke-dasharray="4 3"/>
+    <line x1="263" y1="92" x2="287" y2="106"/><line x1="263" y1="106" x2="287" y2="92"/>
+    <line x1="383" y1="58" x2="407" y2="72"/><line x1="383" y1="72" x2="407" y2="58"/>
+    <path d="M275,110 Q335,138 395,64" stroke-dasharray="4 3"/>
+  </g>
+  <text x="380" y="150" text-anchor="middle" font-size="12.5" style="fill:var(--s8)" font-weight="700">each denominator cancels the next numerator: q<tspan baseline-shift="sub" font-size="10">2</tspan>, q<tspan baseline-shift="sub" font-size="10">3</tspan> disappear</text>
+  <text x="380" y="190" text-anchor="middle" font-size="13.5" font-weight="700">The same thing in logs (what actually appears in the ELBO)</text>
+  <g font-size="14" text-anchor="middle">
+    <text x="380" y="222">[ log q<tspan baseline-shift="sub" font-size="10">1</tspan> − log q<tspan baseline-shift="sub" font-size="10">2</tspan> ] + [ log q<tspan baseline-shift="sub" font-size="10">2</tspan> − log q<tspan baseline-shift="sub" font-size="10">3</tspan> ] + [ log q<tspan baseline-shift="sub" font-size="10">3</tspan> − log q<tspan baseline-shift="sub" font-size="10">4</tspan> ]  =  log q<tspan baseline-shift="sub" font-size="10">1</tspan> − log q<tspan baseline-shift="sub" font-size="10">4</tspan></text>
+  </g>
+  <rect x="150" y="244" width="460" height="64" rx="8" fill="var(--accent-soft)" stroke="var(--s3)"/>
+  <text x="380" y="268" text-anchor="middle" font-size="12.5" font-weight="700">then the leftover q(X<tspan baseline-shift="sub" font-size="10">1</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>) meets the −log q(X<tspan baseline-shift="sub" font-size="10">1</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>) of the t = 1 link:</text>
+  <text x="380" y="290" text-anchor="middle" font-size="12.5">p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">0</tspan>|X<tspan baseline-shift="sub" font-size="10">1</tspan>) / q(X<tspan baseline-shift="sub" font-size="10">1</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>) × q<tspan baseline-shift="sub" font-size="10">1</tspan> / q<tspan baseline-shift="sub" font-size="10">T</tspan>  =  p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">0</tspan>|X<tspan baseline-shift="sub" font-size="10">1</tspan>) / q<tspan baseline-shift="sub" font-size="10">T</tspan></text>
+</svg>
+<figcaption>Figure 11 — Telescoping: in the product of adjacent ratios every intermediate marginal appears once in a numerator and once in a denominator, and only the two ends survive.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Start from the integrand of stage 1, written as one ratio with the $t=1$ links separated: $$\frac{p(X_T)\;p_\theta(X_0\mid X_1)\prod_{t=2}^{T}p_\theta(X_{t-1}\mid X_t)}{q(X_1\mid X_0)\prod_{t=2}^{T}q(X_t\mid X_{t-1})}$$ <span class="why">stage 1, step 6, products instead of sums</span></li>
+<li>Replace every forward conditional in the denominator using stage 3: $$\prod_{t=2}^{T}q(X_t\mid X_{t-1})=\prod_{t=2}^{T}q(X_{t-1}\mid X_t,X_0)\cdot\prod_{t=2}^{T}\frac{q(X_t\mid X_0)}{q(X_{t-1}\mid X_0)}$$ <span class="why">three-variable Bayes rule applied to each $t$, then split the product</span></li>
+<li>Expand the last product, writing $q_t:=q(X_t\mid X_0)$: $$\prod_{t=2}^{T}\frac{q_t}{q_{t-1}}=\frac{q_2}{q_1}\cdot\frac{q_3}{q_2}\cdots\frac{q_{T-1}}{q_{T-2}}\cdot\frac{q_T}{q_{T-1}}$$ <span class="why">writing out $t=2,3,\dots,T$</span></li>
+<li>Every intermediate $q_2,\dots,q_{T-1}$ appears once above and once below the fraction bar and cancels: $$\prod_{t=2}^{T}\frac{q_t}{q_{t-1}}=\frac{q_T}{q_1}$$ <span class="why">telescoping product; (the lecture writes it inverted, $\prod\frac{q_{t-1}}{q_t}=\frac{q_1}{q_T}$, when it sits in the numerator)</span></li>
+<li>Substitute back into the denominator of step 1: $$q(X_1\mid X_0)\cdot\prod_{t=2}^{T}q(X_{t-1}\mid X_t,X_0)\cdot\frac{q(X_T\mid X_0)}{q(X_1\mid X_0)}=q(X_T\mid X_0)\prod_{t=2}^{T}q(X_{t-1}\mid X_t,X_0)$$ <span class="why">the first-link $q(X_1\mid X_0)$ cancels the surviving $q_1$ in the denominator of the telescoped ratio</span></li>
+<li>Hence the integrand is $$\frac{p(X_T)\;p_\theta(X_0\mid X_1)\prod_{t=2}^{T}p_\theta(X_{t-1}\mid X_t)}{q(X_T\mid X_0)\;\prod_{t=2}^{T}q(X_{t-1}\mid X_t,X_0)}$$ <span class="why">step 5 in the denominator of step 1</span></li>
+<li>Take logs and regroup into three kinds of pieces: $$\log p_\theta(X_0\mid X_1)\;+\;\log\frac{p(X_T)}{q(X_T\mid X_0)}\;+\;\sum_{t=2}^{T}\log\frac{p_\theta(X_{t-1}\mid X_t)}{q(X_{t-1}\mid X_t,X_0)}$$ <span class="why">$\log$ of a product is a sum; pair numerator with denominator terms</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>Using the numbers from proofs 7 and 10 ($T=3$): the product of adjacent marginal ratios is $\dfrac{q(X_1|X_0)}{q(X_2|X_0)}\cdot\dfrac{q(X_2|X_0)}{q(X_3|X_0)}=\dfrac{0.9260}{0.6069}\cdot\dfrac{0.6069}{0.4358}=1.5258\times1.3925=2.1247$ and directly $0.9260/0.4358=2.1247$. &#10003;</p>
+<p>Whole trajectory: $q(X_1|X_0)\,q(X_2|X_1)\,q(X_3|X_2)=0.9260\times0.8573\times0.6727=0.5341$ and, as in step 5, $q(X_3\mid X_0)\;q(X_1|X_2,X_0)\;q(X_2|X_3,X_0)=0.4358\times1.3080\times0.9368=0.5341$. &#10003; In logs both sides are $-0.6272$.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>After substituting the three-variable Bayes rule, $q(X_t\mid X_0)$ and $q(X_{t-1}\mid X_0)$ appear once per summand with <strong>adjacent</strong> time steps lining up: everything cancels except the end terms. $q(X_1\mid X_0)$ then cancels the leftover from the first link, leaving only $q(X_T\mid X_0)$.</li>
+<li>That leftover $q(X_T\mid X_0)$ is what pairs with the prior $p(X_T)$ into the prior-matching KL.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Telescoping from $t=1$ instead of $t=2$. The $t=1$ link is not rewritten by Bayes (its forward conditional is already $q(X_1\mid X_0)$); only $t=2,\dots,T$ are.</p></div>
+
+<!-- ============================================================ -->
+<h2 id="ddpm-final" class="proof-head">12. DDPM ELBO, stage 5: assembling the three-term loss</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>$J(\theta)=\underbrace{\mathbb E_{q(X_1\mid X_0)}[\log p_\theta(X_0\mid X_1)]}_{\text{(A) reconstruction}}-\underbrace{D_{KL}(q(X_T\mid X_0)\|p(X_T))}_{\text{(B) prior matching}}-\underbrace{\sum_{t=2}^{T}\mathbb E_{q(X_t\mid X_0)}\big[D_{KL}(q(X_{t-1}\mid X_t,X_0)\|p_\theta(X_{t-1}\mid X_t))\big]}_{\text{(C) denoising matching}}$. <em>Source:</em> 19 Sept class "Step 5: The final DDPM ELBO" and "Interpreting the Three Terms: Known vs. Learned Denoising"; 3 Oct class "Expectation Reduction and ELBO Decomposition", "Interpretation of the Three ELBO Terms". <em>Used later:</em> next page reduces (C) to a regression on the noise; training and sampling algorithms.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 70 760 270" style="max-width:100%;height:auto" role="img" aria-label="Chain annotated with which loss term lives on which link: A on the X1 to X0 reverse link, C on every middle reverse link compared with the known posterior, B at the terminal node">
+  <defs>
+    <marker id="p04f12" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s1)"/></marker>
+    <marker id="p04f12g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s3)"/></marker>
+    <marker id="p04f12o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--s2)"/></marker>
+  </defs>
+  <g font-size="14" text-anchor="middle">
+    <circle cx="70" cy="130" r="24" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="70" y="135">X<tspan baseline-shift="sub" font-size="10">0</tspan></text>
+    <circle cx="210" cy="130" r="24" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="210" y="135">X<tspan baseline-shift="sub" font-size="10">1</tspan></text>
+    <circle cx="350" cy="130" r="24" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="350" y="135">X<tspan baseline-shift="sub" font-size="10">2</tspan></text>
+    <circle cx="560" cy="130" r="24" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="560" y="135">X<tspan baseline-shift="sub" font-size="10">T−1</tspan></text>
+    <circle cx="700" cy="130" r="24" fill="var(--accent-soft)" stroke="var(--s7)" stroke-width="2"/><text x="700" y="135">X<tspan baseline-shift="sub" font-size="10">T</tspan></text>
+    <text x="455" y="136" font-size="22" class="muted-t">⋯</text>
+  </g>
+  <g stroke="var(--s1)" stroke-width="2.4" fill="none">
+    <line x1="186" y1="142" x2="96" y2="142" marker-end="url(#p04f12)"/>
+    <line x1="326" y1="142" x2="236" y2="142" marker-end="url(#p04f12)"/>
+    <line x1="430" y1="142" x2="374" y2="142" marker-end="url(#p04f12)"/>
+    <line x1="536" y1="142" x2="480" y2="142" marker-end="url(#p04f12)"/>
+    <line x1="676" y1="142" x2="586" y2="142" marker-end="url(#p04f12)"/>
+  </g>
+  <g stroke="var(--s3)" stroke-width="2.2" stroke-dasharray="6 4" fill="none">
+    <line x1="326" y1="118" x2="236" y2="118" marker-end="url(#p04f12g)"/>
+    <line x1="430" y1="118" x2="374" y2="118" marker-end="url(#p04f12g)"/>
+    <line x1="536" y1="118" x2="480" y2="118" marker-end="url(#p04f12g)"/>
+    <line x1="676" y1="118" x2="586" y2="118" marker-end="url(#p04f12g)"/>
+  </g>
+  <rect x="18" y="176" width="218" height="82" rx="8" fill="var(--accent-soft)" stroke="var(--s1)" stroke-width="2"/>
+  <text x="127" y="198" text-anchor="middle" font-size="13" font-weight="700">(A) reconstruction</text>
+  <text x="127" y="218" text-anchor="middle" font-size="12">E over q(X<tspan baseline-shift="sub" font-size="10">1</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+  <text x="127" y="236" text-anchor="middle" font-size="12">[ log p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">0</tspan>|X<tspan baseline-shift="sub" font-size="10">1</tspan>) ]</text>
+  <text x="127" y="251" text-anchor="middle" font-size="11" class="muted-t">same as the VAE reconstruction term</text>
+  <rect x="250" y="176" width="364" height="82" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="2"/>
+  <text x="432" y="198" text-anchor="middle" font-size="13" font-weight="700">(C) denoising matching, t = 2 … T</text>
+  <text x="432" y="218" text-anchor="middle" font-size="12">− E over q(X<tspan baseline-shift="sub" font-size="10">t</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>) KL( q(X<tspan baseline-shift="sub" font-size="10">t−1</tspan>|X<tspan baseline-shift="sub" font-size="10">t</tspan>,X<tspan baseline-shift="sub" font-size="10">0</tspan>) ‖ p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">t−1</tspan>|X<tspan baseline-shift="sub" font-size="10">t</tspan>) )</text>
+  <text x="432" y="236" text-anchor="middle" font-size="12"><tspan style="fill:var(--s3)" font-weight="700">green dashed = known (uses X<tspan baseline-shift="sub" font-size="10">0</tspan>)</tspan>,  <tspan style="fill:var(--s1)" font-weight="700">blue = learned</tspan></text>
+  <text x="432" y="251" text-anchor="middle" font-size="11" class="muted-t">the new term created by the hierarchical structure</text>
+  <rect x="628" y="176" width="124" height="82" rx="8" fill="var(--surface-2)" stroke="var(--s7)" stroke-width="2"/>
+  <text x="690" y="198" text-anchor="middle" font-size="13" font-weight="700">(B) prior</text>
+  <text x="690" y="216" text-anchor="middle" font-size="12">− KL( q(X<tspan baseline-shift="sub" font-size="10">T</tspan>|X<tspan baseline-shift="sub" font-size="10">0</tspan>)</text>
+  <text x="690" y="232" text-anchor="middle" font-size="12">‖ p(X<tspan baseline-shift="sub" font-size="10">T</tspan>) )</text>
+  <text x="690" y="249" text-anchor="middle" font-size="11" class="muted-t">no θ: drop it</text>
+  <text x="380" y="290" text-anchor="middle" font-size="13" font-weight="700">Generation: X<tspan baseline-shift="sub" font-size="10">T</tspan> ~ N(0, I), then apply p<tspan baseline-shift="sub" font-size="10">θ</tspan>(X<tspan baseline-shift="sub" font-size="10">t−1</tspan>|X<tspan baseline-shift="sub" font-size="10">t</tspan>) for t = T … 1</text>
+  <text x="380" y="312" text-anchor="middle" font-size="12.5" class="muted-t">training makes each blue link imitate its green dashed twin; the green twin needs X<tspan baseline-shift="sub" font-size="10">0</tspan>, the blue one does not</text>
+</svg>
+<figcaption>Figure 12 — Where each term of the loss lives on the chain. Every reverse link $t\ge2$ is trained to match the data-anchored denoising step; the first link is a VAE-style likelihood; the terminal node contributes a constant.</figcaption>
+</figure>
+
+<ol class="steps">
+<li>Take $\mathbb E_{q(X_{1:T}\mid X_0)}$ of the three-part integrand of stage 4, using linearity: $$J(\theta)=\mathbb E_q[\log p_\theta(X_0\mid X_1)]+\mathbb E_q\!\left[\log\frac{p(X_T)}{q(X_T\mid X_0)}\right]+\sum_{t=2}^{T}\mathbb E_q\!\left[\log\frac{p_\theta(X_{t-1}\mid X_t)}{q(X_{t-1}\mid X_t,X_0)}\right]$$ <span class="why">linearity of expectation</span></li>
+<li><strong>(A)</strong> The first expectation involves only $X_1$: $$\mathbb E_{q(X_{1:T}\mid X_0)}[\log p_\theta(X_0\mid X_1)]=\mathbb E_{q(X_1\mid X_0)}[\log p_\theta(X_0\mid X_1)]$$ <span class="why">survival of variables (stage 2)</span></li>
+<li><strong>(B)</strong> The second involves only $X_T$ and is minus a KL: $$\mathbb E_{q(X_T\mid X_0)}\!\left[\log\frac{p(X_T)}{q(X_T\mid X_0)}\right]=-\mathbb E_{q(X_T\mid X_0)}\!\left[\log\frac{q(X_T\mid X_0)}{p(X_T)}\right]=-D_{KL}\big(q(X_T\mid X_0)\,\|\,p(X_T)\big)$$ <span class="why">survival; definition of KL</span></li>
+<li><strong>(C)</strong> Each remaining term involves the pair $(X_{t-1},X_t)$; nest the expectation: $$\mathbb E_{q(X_{t-1},X_t\mid X_0)}\!\left[\log\frac{p_\theta(X_{t-1}\mid X_t)}{q(X_{t-1}\mid X_t,X_0)}\right]=\mathbb E_{q(X_t\mid X_0)}\Big[\mathbb E_{q(X_{t-1}\mid X_t,X_0)}\Big[\log\frac{p_\theta(X_{t-1}\mid X_t)}{q(X_{t-1}\mid X_t,X_0)}\Big]\Big]$$ <span class="why">tower property (stage 2, step 6)</span></li>
+<li>The inner expectation is taken under the very distribution in the denominator, with the ratio flipped, so it is minus a KL: $$\mathbb E_{q(X_{t-1}\mid X_t,X_0)}\!\left[\log\frac{p_\theta(X_{t-1}\mid X_t)}{q(X_{t-1}\mid X_t,X_0)}\right]=-D_{KL}\big(q(X_{t-1}\mid X_t,X_0)\,\|\,p_\theta(X_{t-1}\mid X_t)\big)$$ <span class="why">definition $D_{KL}(q\|p)=\mathbb E_q[\log\frac qp]$ and $\log\frac pq=-\log\frac qp$</span></li>
+<li>Collect (A), (B), (C): $$J(\theta)=\mathbb E_{q(X_1\mid X_0)}[\log p_\theta(X_0\mid X_1)]-D_{KL}\big(q(X_T\mid X_0)\|p(X_T)\big)-\sum_{t=2}^{T}\mathbb E_{q(X_t\mid X_0)}\Big[D_{KL}\big(q(X_{t-1}\mid X_t,X_0)\,\|\,p_\theta(X_{t-1}\mid X_t)\big)\Big]$$ <span class="why">steps 1–5</span></li>
+<li>$\theta$ appears in (A) and (C) only. (B) contains the fixed forward process and the fixed prior $p(X_T)=\mathcal N(0,I)$, so it is a constant offset and is <strong>dropped from the optimisation</strong>. Maximising $J$ is equivalent to maximising (A) while minimising every KL in (C). <span class="why">no $\theta$ means no gradient</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box"><span class="box-title">Worked numeric check</span>
+<p>One consistency term at $t=2$ in the running example. Known denoising (from proofs 10–11): $q(X_1\mid X_2,X_0)=\mathcal N(0.8374,\,0.0714)$. Suppose the model's step is $p_\theta(X_1\mid X_2)=\mathcal N(0.7,\,0.0714)$ (same variance, mean off by $0.1374$).</p>
+<p>For equal variances $\sigma^2$: $D_{KL}(\mathcal N(\mu_1,\sigma^2)\|\mathcal N(\mu_2,\sigma^2))=\mathbb E[(z-\mu_2)^2-(z-\mu_1)^2]/(2\sigma^2)=(\mu_1-\mu_2)^2/(2\sigma^2)$ (the $z$-dependent cross terms combine to $(\mu_1-\mu_2)^2$ in expectation).</p>
+<p>$D_{KL}=\dfrac{0.1374^2}{2\times0.0714}=\dfrac{0.01887}{0.1429}=0.132$ nats. A model that matches the known mean exactly gives $0$; the term is zero only if learned and known denoising agree.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Three terms: <strong>(A)</strong> reconstruction, structurally identical to a VAE's with $X_0$ as data and $X_1$ as the first latent; <strong>(B)</strong> prior matching, the analogue of the VAE's single KL, independent of $\theta$; <strong>(C)</strong> denoising matching ("consistency"), "the most important term", sum from $t=2$ to $T$.</li>
+<li>Known vs learned: $q(X_{t-1}\mid X_t,X_0)$ is the known denoiser (closed form because the forward process is fixed); $p_\theta(X_{t-1}\mid X_t)$ is the learned one and has <strong>no access to $X_0$</strong>. Matching them at every $t$ means chaining $p_\theta$ from pure noise reproduces the reverse of the forward process without a real $X_0$ — that is what makes it generative.</li>
+<li>Professor's summary: learn the denoising process "by matching the denoising process to the known denoising that we have enforced through the encoding".</li>
+<li>Where it stopped: reducing (C) to a simple regression on $\epsilon$ was explicitly left for the next class (see the next page).</li>
+<li>The professor urged: "work all the math" of this derivation yourself.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>(i) Starting the sum at $t=1$ (the $t=1$ link is term A); (ii) writing the outer expectation of (C) over $q(X_{1:T}\mid X_0)$ or forgetting that it is over $q(X_t\mid X_0)$; (iii) putting $X_0$ inside $p_\theta(X_{t-1}\mid X_t)$ — the model cannot see the clean image at generation time; (iv) keeping (B) in the gradient (it is $\theta$-free).</p></div>
+
+<!-- ============================================================ -->
+<h2 id="summary" class="proof-head">13. Summary table of all proofs</h2>
+
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Proof</th><th>Statement</th><th>Key trick</th></tr>
+<tr><td>1</td><td><a href="#vae-elbo">VAE ELBO</a></td><td>$\log p_\theta(x)\ge\mathbb E_q[\log p_\theta(x\mid z)]-D_{KL}(q\|p(z))$, gap $=D_{KL}(q\|p_\theta(z\mid x))$</td><td>multiply-and-divide by $q$, Jensen, $p(x,z)=p(x\mid z)p(z)$</td></tr>
+<tr><td>2</td><td><a href="#gauss-kl">Gaussian KL</a></td><td>$\tfrac12\sum(\mu^2+\sigma^2-1-\log\sigma^2)$</td><td>$\mathbb E[(z-\mu)^2]=\sigma^2$, $\mathbb E[z^2]=\sigma^2+\mu^2$; independence gives a sum over dimensions</td></tr>
+<tr><td>3</td><td><a href="#reparam">Reparameterisation</a></td><td>$\nabla_\phi\mathbb E_q[f]=\mathbb E_\epsilon[\nabla_\phi f(\mu+\sigma\epsilon)]$</td><td>move randomness into parameter-free $\epsilon$; then $\nabla$ and $\mathbb E$ commute</td></tr>
+<tr><td>4</td><td><a href="#prior-sampling">Prior sampling works</a></td><td>KL term pulls $q(z\mid x)$ and the aggregate posterior to $p(z)$</td><td>$D_{KL}=0$ iff equal; $\mathbb E_xD_{KL}=I(X;Z)+D_{KL}(q(z)\|p(z))$</td></tr>
+<tr><td>5</td><td><a href="#vqvae">VQ-VAE</a></td><td>$z_q=z_{j^*}$, $j^*=\arg\min\|z_e-z_j\|$; loss rec + codebook + commitment</td><td>straight-through: $z_e+\operatorname{sg}[z_q-z_e]$; stop-gradient split of $\|z_e-z_q\|^2$</td></tr>
+<tr><td>6</td><td><a href="#ddpm-forward">Forward step</a></td><td>$q(X_t\mid X_{t-1})=\mathcal N(\sqrt{\alpha_t}X_{t-1},(1-\alpha_t)I)$; Markov; $\mathcal N(0,I)$ is fixed</td><td>constant plus scaled Gaussian; variances $\alpha_t+(1-\alpha_t)=1$</td></tr>
+<tr><td>7</td><td><a href="#ddpm-factor">Joint factorisations</a></td><td>$q(X_{1:T}\mid X_0)=\prod q(X_t\mid X_{t-1})$, $p_\theta=p(X_T)\prod p_\theta(X_{t-1}\mid X_t)$</td><td>chain rule, then first-order Markov to shorten each conditional</td></tr>
+<tr><td>8</td><td><a href="#ddpm-elbo-start">ELBO, stage 1</a></td><td>$J(\theta)$ as a sum of per-link log terms</td><td>same ELBO template with $Z=X_{1:T}$; split off the $t=1$ link</td></tr>
+<tr><td>9</td><td><a href="#ddpm-survive">ELBO, stage 2</a></td><td>only the variables a term depends on survive; pair expectation nests</td><td>marginalise the rest; $q(X_{t-1},X_t\mid X_0)=q(X_t\mid X_0)q(X_{t-1}\mid X_t,X_0)$</td></tr>
+<tr><td>10</td><td><a href="#ddpm-bayes">ELBO, stage 3</a></td><td>$q(X_t\mid X_{t-1})=\dfrac{q(X_{t-1}\mid X_t,X_0)q(X_t\mid X_0)}{q(X_{t-1}\mid X_0)}$</td><td>insert $X_0$ for free (Markov), then Bayes with common conditioning on $X_0$</td></tr>
+<tr><td>11</td><td><a href="#ddpm-telescope">ELBO, stage 4</a></td><td>$\prod_{t=2}^T\frac{q_{t-1}}{q_t}=\frac{q_1}{q_T}$; $q(X_1\mid X_0)$ cancels the first link</td><td>adjacent ratios cancel in a telescoping product</td></tr>
+<tr><td>12</td><td><a href="#ddpm-final">ELBO, stage 5</a></td><td>$J=\mathbb E[\log p_\theta(X_0\mid X_1)]-D_{KL}(q(X_T\mid X_0)\|p(X_T))-\sum_{t\ge2}\mathbb E\,D_{KL}(q(X_{t-1}\mid X_t,X_0)\|p_\theta(X_{t-1}\mid X_t))$</td><td>survival of variables + tower property, then recognise $\mathbb E_q\log\frac qp$ as a KL</td></tr>
+</table></div>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reward model, DPO, GRPO and state-space models — DGM Lecture Proofs</title>
+<link rel="stylesheet" href="assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="assets/style.css">
+<script defer src="assets/vendor/katex/katex.min.js"></script>
+<script defer src="assets/vendor/katex/auto-render.min.js"></script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/site.js"></script>
+</head>
+<body data-page="p09" data-root=".">
+<main class="content">
+
+<div class="hero">
+  <div class="kicker">Lecture proofs · RLHF and sequence models</div>
+  <h1>Reward model, DPO, GRPO and state-space models</h1>
+  <p class="lead">Seven derivations from the Nov 7 class (with the Nov 10 recording filling gaps): Bradley-Terry reward learning, the closed-form KL-regularised policy, the staged DPO derivation, the group-relative advantage of GRPO, ZOH discretisation of a state-space model, its unrolling into a convolution, and the S4 / Mamba ideas. Each proof has a picture, numbered algebra steps with reasons, and a worked number check.</p>
+</div>
+
+<div class="box key"><span class="box-title">Notation</span>
+<p>$x$ = prompt, $y$ = response (an LLM's output sequence), $y_w \succ y_l$ = "winner preferred over loser", $r(x,y)$ = scalar reward, $\pi_\theta$ = policy being trained, $\pi_{\mathrm{ref}}$ = frozen reference policy (the "old" policy of the PPO part), $\beta>0$ = KL strength, $\sigma(z)=1/(1+e^{-z})$. For SSMs: $u$ input, $x(t)$ hidden state, $y$ output, $\Delta$ sampling step. (Note the clash: in the SSM part $x$ is the <em>state</em>, not the prompt; the professor flagged this.)</p></div>
+
+<div class="box"><span class="box-title">Roadmap</span>
+<ol class="small">
+<li><a href="#bt">Bradley-Terry reward model and its loss</a></li>
+<li><a href="#klopt">Closed-form optimum of the KL-regularised objective</a></li>
+<li><a href="#dpo">Direct Preference Optimization, staged derivation</a></li>
+<li><a href="#grpo">GRPO: group-relative advantage replaces the critic</a></li>
+<li><a href="#zoh">SSM discretisation (zero-order hold)</a></li>
+<li><a href="#conv">Unrolling the recurrence into a convolution</a></li>
+<li><a href="#s4mamba">S4 kernel generating function and Mamba selectivity</a></li>
+<li><a href="#summary">Summary table</a></li>
+</ol></div>
+
+<!-- ================================================================ -->
+<h2 id="bt" class="proof-head">1. Bradley-Terry reward model and its loss</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>(Lecture Nov 7 / Nov 10.) If the probability that $y_w$ beats $y_l$ is modelled as $\dfrac{e^{r_w}}{e^{r_w}+e^{r_l}}$, then it equals $\sigma(r_w-r_l)$, depends only on the reward <em>difference</em>, and fitting $r_\phi$ by maximum likelihood on preference pairs is exactly minimising $-\mathbb E\log\sigma\big(r_\phi(x,y_w)-r_\phi(x,y_l)\big)$. Used later: this loss is the starting point of DPO (proof 3).</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 370" style="max-width:100%;height:auto" role="img" aria-label="Preference data pipeline and sigmoid of the reward difference">
+  <defs><marker id="p09a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <text x="380" y="18" text-anchor="middle" font-size="14" font-weight="700">Human preference to reward model</text>
+  <g font-size="12.5" text-anchor="middle">
+    <rect x="20" y="34" width="90" height="44" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="65" y="60">prompt x</text>
+    <rect x="150" y="26" width="120" height="30" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="210" y="46">response y_w</text>
+    <rect x="150" y="62" width="120" height="30" rx="8" fill="var(--surface-2)" stroke="var(--s8)"/><text x="210" y="82">response y_l</text>
+    <rect x="310" y="34" width="130" height="44" rx="8" fill="var(--accent-soft)" stroke="var(--s4)"/><text x="375" y="52">annotator picks</text><text x="375" y="68" class="muted-t" font-size="11.5">y_w preferred</text>
+    <rect x="480" y="34" width="120" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s7)"/><text x="540" y="52">reward net r_phi</text><text x="540" y="68" class="muted-t" font-size="11.5">scores (x,y)</text>
+    <rect x="620" y="34" width="130" height="44" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="685" y="52">loss</text><text x="685" y="68" class="muted-t" font-size="11">-log sigma(r_w - r_l)</text>
+  </g>
+  <line x1="110" y1="56" x2="148" y2="45" stroke="var(--text-3)" stroke-width="1.5" marker-end="url(#p09a1)"/>
+  <line x1="110" y1="56" x2="148" y2="77" stroke="var(--text-3)" stroke-width="1.5" marker-end="url(#p09a1)"/>
+  <line x1="270" y1="56" x2="308" y2="56" stroke="var(--text-3)" stroke-width="1.5" marker-end="url(#p09a1)"/>
+  <line x1="440" y1="56" x2="478" y2="56" stroke="var(--text-3)" stroke-width="1.5" marker-end="url(#p09a1)"/>
+  <line x1="600" y1="56" x2="618" y2="56" stroke="var(--text-3)" stroke-width="1.5" marker-end="url(#p09a1)"/>
+  <g transform="translate(0,110)">
+  <line x1="50" y1="200" x2="370" y2="200" stroke="var(--text-3)"/><line x1="210" y1="110" x2="210" y2="204" stroke="var(--text-3)" stroke-dasharray="3 3"/>
+  <line x1="50" y1="120" x2="370" y2="120" stroke="var(--text-3)" stroke-dasharray="3 3"/>
+  <path d="M50.0,197.1 L58.0,196.5 L66.0,195.7 L74.0,194.8 L82.0,193.7 L90.0,192.4 L98.0,190.8 L106.0,188.9 L114.0,186.7 L122.0,184.0 L130.0,180.9 L138.0,177.3 L146.0,173.1 L154.0,168.3 L162.0,163.0 L170.0,157.0 L178.0,150.4 L186.0,143.3 L194.0,135.8 L202.0,128.0 L210.0,120.0 L218.0,112.0 L226.0,104.2 L234.0,96.7 L242.0,89.6 L250.0,83.0 L258.0,77.0 L266.0,71.7 L274.0,66.9 L282.0,62.7 L290.0,59.1 L298.0,56.0 L306.0,53.3 L314.0,51.1 L322.0,49.2 L330.0,47.6 L338.0,46.3 L346.0,45.2 L354.0,44.3 L362.0,43.5 L370.0,42.9" fill="none" stroke="var(--s1)" stroke-width="2.6"/>
+  <circle cx="270" cy="69.2" r="5" fill="var(--s2)"/>
+  <line x1="270" y1="69.2" x2="270" y2="200" stroke="var(--s2)" stroke-dasharray="3 3"/>
+  <text x="276" y="62" font-size="12" style="fill:var(--s2)" font-weight="700">0.818</text>
+  <text x="270" y="216" text-anchor="middle" font-size="12">1.5</text><text x="210" y="216" text-anchor="middle" font-size="12">0</text>
+  <text x="44" y="124" text-anchor="end" font-size="11.5">0.5</text><text x="44" y="46" text-anchor="end" font-size="11.5">1</text><text x="44" y="204" text-anchor="end" font-size="11.5">0</text>
+  <text x="210" y="238" text-anchor="middle" font-size="12.5">reward gap  r_w - r_l</text>
+  <text x="210" y="106" text-anchor="middle" font-size="12" class="muted-t">P(y_w beats y_l) = sigma(gap)</text>
+  <!-- loss curve description -->
+  <g font-size="12.5">
+    <text x="420" y="130" font-weight="700">Reading the curve</text>
+    <text x="420" y="152" class="muted-t" font-size="12">gap = 0: coin flip (0.5)</text>
+    <text x="420" y="172" class="muted-t" font-size="12">gap = 1.5 (r_w=2, r_l=0.5): 0.818, loss 0.201</text>
+    <text x="420" y="192" class="muted-t" font-size="12">gap negative: model prefers the loser,</text>
+    <text x="420" y="208" class="muted-t" font-size="12">loss is large and gradient is steep</text>
+    <text x="420" y="232" class="muted-t" font-size="12">shifting both rewards leaves the gap, hence the</text>
+    <text x="420" y="248" class="muted-t" font-size="12">probability, unchanged</text>
+  </g>
+  </g>
+</svg>
+<figcaption class="small muted">Figure 1 — Top: where preference pairs come from and how they train the reward network. Bottom left: the Bradley-Terry win probability as a sigmoid of the reward gap; the orange point is the worked example below.</figcaption>
+</figure>
+
+<h3>Derivation</h3>
+<ol class="steps">
+<li>Give every candidate a positive "strength" $e^{r}$. Bradley-Terry says the chance that item $i$ wins a pairwise contest is its share of the total strength:
+$$P(y_w\succ y_l\mid x)=\frac{e^{r(x,y_w)}}{e^{r(x,y_w)}+e^{r(x,y_l)}}$$ <span class="why">Bradley-Terry (Luce choice) model</span>
+<span class="why">definition; the model class we assume</span></li>
+<li>Divide numerator and denominator by $e^{r(x,y_w)}$:
+$$P(y_w\succ y_l\mid x)=\frac{1}{1+e^{-(r(x,y_w)-r(x,y_l))}}$$ <span class="why">algebra</span></li>
+<li>Recognise the logistic function:
+$$P_\phi(y_w\succ y_l\mid x)=\sigma\big(r_\phi(x,y_w)-r_\phi(x,y_l)\big)$$ <span class="why">$\sigma(z)=1/(1+e^{-z})$</span></li>
+<li>Invariance: replace $r\to r+c(x)$ for any function of the prompt alone. The difference $r_w-r_l$ is unchanged, so the probability is unchanged:
+$$\sigma\big((r_w+c)-(r_l+c)\big)=\sigma(r_w-r_l)$$ <span class="why">$\sigma(a-b)$ depends only on the difference</span>
+Hence $r$ is only identified up to a per-prompt constant. (This is exactly the freedom that lets $Z(x)$ vanish in proof 3.)</li>
+<li>Data are pairs $(x_i,y_{w,i},y_{l,i})$ with the winner labelled by the human. The likelihood of the dataset, taking pairs as independent, is the product of $P_\phi(y_w\succ y_l\mid x)$:
+$$\mathcal L(\phi)=\prod_i\sigma\big(r_\phi(x_i,y_{w,i})-r_\phi(x_i,y_{l,i})\big)$$ <span class="why">maximum likelihood, i.i.d. pairs</span></li>
+<li>Take the log (monotone, turns the product into a sum) and flip sign to get a loss to minimise; the average over data is the expectation:
+$$\mathcal L_{\mathrm{RM}}(\phi)=-\mathbb E_{(x,y_w,y_l)}\log\sigma\big(r_\phi(x,y_w)-r_\phi(x,y_l)\big)$$ <span class="why">negative log-likelihood</span></li>
+<li>Gradient (step filled in — not written out in class). Let $\Delta r=r_w-r_l$. Using $\sigma'(z)=\sigma(z)\sigma(-z)$,
+$$\nabla_\phi\big[-\log\sigma(\Delta r)\big]=-\sigma(-\Delta r)\,\big(\nabla_\phi r_w-\nabla_\phi r_l\big)$$ <span class="why">chain rule</span>
+The weight $\sigma(-\Delta r)=1-P(y_w\succ y_l)$ is the model's current error probability: confident-correct pairs barely update, mistakes update strongly.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box def"><span class="box-title">Worked check</span>
+<p>$r_w=2$, $r_l=0.5$: gap $=1.5$; $P=\sigma(1.5)=0.8176$; loss $=-\ln 0.8176=0.2014$. Direct form: $e^{2}/(e^{2}+e^{0.5})=7.389/(7.389+1.649)=0.8176$. ✓. Gradient weight $\sigma(-1.5)=0.1824$. Shift test: $r_w=12,\ r_l=10.5$ gives the same $0.8176$. If the model were wrong ($r_w=0.5,\ r_l=2$): $P=0.1824$, loss $=1.70$, weight $0.8176$.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Data is $(x,y_w,y_l)$: <em>pairwise</em> comparison is easier and less subjective than scoring 0 to 10 and regressing (professor's motivation; scale.ai-style data collection).</li>
+<li>Write both forms: ratio of exponentials $=\sigma(r_w-r_l)$, and the boxed loss $-\mathbb E\log\sigma(r_w-r_l)$.</li>
+<li>The reward model is a <em>separate transformer</em> from the policy; it takes $(x,y)$ and returns a real number.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Reading $r$ as a calibrated absolute score. Only differences are identified (step 4), so the same loss is minimised by $r$ and $r+c(x)$; also never write the loss as $-\log\sigma(r_l-r_w)$ (that trains the model to prefer the loser).</p></div>
+
+<!-- ================================================================ -->
+<h2 id="klopt" class="proof-head">2. Closed-form optimum of the KL-regularised objective</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>(Lecture Nov 7 / Nov 10; the professor said it follows by differentiating and "variational calculus"; the completing-the-KL route below is filled in.) For a fixed prompt $x$, the maximiser of $\mathbb E_{y\sim\pi}[r(x,y)]-\beta\,D_{\mathrm{KL}}(\pi\|\pi_{\mathrm{ref}})$ over distributions $\pi$ is $\pi^*(y|x)=\pi_{\mathrm{ref}}(y|x)\,e^{r(x,y)/\beta}/Z(x)$. Used later: inverting it gives the reward in terms of policies, the key move of DPO.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 270" style="max-width:100%;height:auto" role="img" aria-label="Reference policy reweighted by exp(r) and normalised">
+  <text x="380" y="18" text-anchor="middle" font-size="14" font-weight="700">Reference policy reweighted by exp(r/beta), beta = 1</text>
+  <!-- panel 1 ref -->
+  <line x1="30" y1="200" x2="230" y2="200" stroke="var(--text-3)"/>
+  <rect x="50" y="100" width="40" height="100" fill="var(--s1)" opacity=".6"/><rect x="120" y="140" width="40" height="60" fill="var(--s1)" opacity=".6"/><rect x="190" y="160" width="40" height="40" fill="var(--s1)" opacity=".6"/>
+  <g font-size="12" text-anchor="middle"><text x="70" y="94">0.50</text><text x="140" y="134">0.30</text><text x="210" y="154">0.20</text>
+  <text x="70" y="216">y1</text><text x="140" y="216">y2</text><text x="210" y="216">y3</text></g>
+  <text x="130" y="40" text-anchor="middle" font-size="13" font-weight="700">pi_ref</text>
+  <text x="130" y="238" text-anchor="middle" font-size="11.5" class="muted-t">reward r = 0, 1, 2</text>
+  <text x="250" y="140" text-anchor="middle" font-size="22">×</text>
+  <!-- panel 2 weights -->
+  <line x1="270" y1="200" x2="470" y2="200" stroke="var(--text-3)"/>
+  <rect x="290" y="150" width="40" height="50" fill="var(--s4)" opacity=".75"/><rect x="360" y="118" width="40" height="82" fill="var(--s4)" opacity=".75"/><rect x="430" y="52" width="40" height="148" fill="var(--s4)" opacity=".75"/>
+  <g font-size="12" text-anchor="middle"><text x="310" y="144">0.50</text><text x="380" y="112">0.815</text><text x="450" y="46">1.478</text>
+  <text x="310" y="216">y1</text><text x="380" y="216">y2</text><text x="450" y="216">y3</text></g>
+  <text x="370" y="40" text-anchor="middle" font-size="13" font-weight="700">pi_ref · e^r</text>
+  <text x="370" y="238" text-anchor="middle" font-size="11.5" class="muted-t">sum = Z = 2.793</text>
+  <text x="490" y="140" text-anchor="middle" font-size="20">÷ Z</text>
+  <!-- panel 3 -->
+  <line x1="520" y1="200" x2="740" y2="200" stroke="var(--text-3)"/>
+  <rect x="540" y="164" width="40" height="36" fill="var(--s2)"/><rect x="610" y="141" width="40" height="59" fill="var(--s2)"/><rect x="680" y="94" width="40" height="106" fill="var(--s2)"/>
+  <g font-size="12" text-anchor="middle"><text x="560" y="158">0.179</text><text x="630" y="135">0.292</text><text x="700" y="88">0.529</text>
+  <text x="560" y="216">y1</text><text x="630" y="216">y2</text><text x="700" y="216">y3</text></g>
+  <text x="630" y="40" text-anchor="middle" font-size="13" font-weight="700">pi* (normalised)</text>
+  <text x="630" y="238" text-anchor="middle" font-size="11.5" class="muted-t">mass moves to high reward, stays near pi_ref</text>
+</svg>
+<figcaption class="small muted">Figure 2 — The optimal policy is the reference policy multiplied pointwise by $e^{r/\beta}$ and renormalised (a Boltzmann / Gibbs distribution). Smaller $\beta$ makes the tilt sharper.</figcaption>
+</figure>
+
+<h3>Derivation (completing the KL)</h3>
+<ol class="steps">
+<li>Fix $x$ and write the objective as a sum over responses:
+$$J(\pi)=\sum_y\pi(y|x)\,r(x,y)-\beta\sum_y\pi(y|x)\log\frac{\pi(y|x)}{\pi_{\mathrm{ref}}(y|x)}$$ <span class="why">definition of expectation and KL</span></li>
+<li>Factor $-\beta$ and combine the logs, using $r=\beta\log e^{r/\beta}$:
+$$J(\pi)=-\beta\sum_y\pi(y|x)\log\frac{\pi(y|x)}{\pi_{\mathrm{ref}}(y|x)\,e^{r(x,y)/\beta}}$$ <span class="why">$\log a-\log b$ combined</span></li>
+<li>The denominator is not a distribution; define its normaliser (sum over all responses, independent of $\pi$ and of any particular $y$):
+$$Z(x)=\sum_y\pi_{\mathrm{ref}}(y|x)\,e^{r(x,y)/\beta},\qquad \pi^*(y|x)=\frac{\pi_{\mathrm{ref}}(y|x)\,e^{r(x,y)/\beta}}{Z(x)}$$ <span class="why">normalisation constant independent of $y$</span></li>
+<li>Write $\pi_{\mathrm{ref}}e^{r/\beta}=Z\,\pi^*$ inside the log and pull $\log Z$ out; $\sum_y\pi=1$ makes it a constant:
+$$J(\pi)=-\beta\sum_y\pi\log\frac{\pi}{\pi^*}+\beta\log Z(x)=-\beta\,D_{\mathrm{KL}}(\pi\|\pi^*)+\beta\log Z(x)$$ <span class="why">$\sum_y\pi=1$</span></li>
+<li>Gibbs inequality: $D_{\mathrm{KL}}(\pi\|\pi^*)\ge0$ with equality iff $\pi=\pi^*$. So $J(\pi)\le\beta\log Z(x)$ for every $\pi$, with equality exactly at $\pi^*$:
+$$\max_\pi J(\pi)=\beta\log Z(x),\qquad \arg\max_\pi J=\pi^*$$ <span class="why">KL $\ge0$ (Gibbs variational principle)</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<h3>Same result via the Lagrangian (the route the professor described)</h3>
+<ol class="steps">
+<li>Add a multiplier $\lambda$ for $\sum_y\pi=1$: $\ \mathcal L=\sum_y\pi\,r-\beta\sum_y\pi\log\frac{\pi}{\pi_{\mathrm{ref}}}-\lambda\big(\sum_y\pi-1\big)$ <span class="why">constrained optimisation</span></li>
+<li>Differentiate with respect to $\pi(y)$ and set to zero:
+$$r(x,y)-\beta\Big(\log\frac{\pi(y)}{\pi_{\mathrm{ref}}(y)}+1\Big)-\lambda=0$$ <span class="why">$\partial(\pi\log\pi)/\partial\pi=\log\pi+1$</span></li>
+<li>Solve for $\pi$: $\ \pi(y)=\pi_{\mathrm{ref}}(y)\,e^{r(x,y)/\beta}\,e^{-(1+\lambda/\beta)}$. The last factor does not depend on $y$ and is fixed by $\sum_y\pi=1$ to be $1/Z(x)$. <span class="why">normalisation</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box def"><span class="box-title">Worked check ($\beta=1$)</span>
+<p>$\pi_{\mathrm{ref}}=(0.5,0.3,0.2)$, $r=(0,1,2)$. Weights $\pi_{\mathrm{ref}}e^{r}=(0.5,\,0.8155,\,1.4778)$, so $Z=2.7933$ and $\pi^*=(0.179,\,0.292,\,0.529)$. Objective values: $J(\pi_{\mathrm{ref}})=\mathbb E[r]-0=0.7$; $J(\pi^*)=1.0272=\ln Z$ ✓ (the bound $\beta\log Z$ is attained). For a rival $\pi=$ uniform: $J=0.9298$, and $\beta\log Z-J=0.0975=D_{\mathrm{KL}}(\text{unif}\|\pi^*)$ ✓ matches step 4. With $\beta=0.5$: $\pi^*=(0.037,0.163,0.801)$, sharper toward the best response.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>$\pi^*=\frac1{Z(x)}\pi_{\mathrm{ref}}\exp(r/\beta)$; $\beta\to\infty$ gives $\pi^*\to\pi_{\mathrm{ref}}$, $\beta\to0$ concentrates on $\arg\max r$.</li>
+<li>The professor stressed that $\pi^*$ is "only theoretical": $Z(x)$ sums over all possible responses and cannot be computed, and the true $r$ is unknown. DPO sidesteps both.</li>
+<li>This is the same constrained problem as TRPO/PPO (reward subject to KL to the old/reference policy), here as the penalised Lagrangian form.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Forgetting that $Z$ depends on $x$ (it is a sum over $y$ for that prompt), or dropping $\pi_{\mathrm{ref}}$: the optimum is $\pi_{\mathrm{ref}}$ <em>tilted</em> by the reward, not $\mathrm{softmax}(r/\beta)$ alone.</p></div>
+
+<!-- ================================================================ -->
+<h2 id="dpo" class="proof-head">3. Direct Preference Optimization, staged derivation</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>(Lecture Nov 7 / Nov 10.) Substituting the optimal-policy identity of proof 2 into the Bradley-Terry model makes $Z(x)$ cancel, and maximum likelihood on preference pairs becomes a loss in $\pi_\theta$ alone: $\mathcal L_{\mathrm{DPO}}=-\mathbb E\log\sigma\big(\beta[\log\frac{\pi_\theta(y_w|x)}{\pi_{\mathrm{ref}}(y_w|x)}-\log\frac{\pi_\theta(y_l|x)}{\pi_{\mathrm{ref}}(y_l|x)}]\big)$. No reward network, no RL loop. This is the central result of the RLHF part; proofs 1 and 2 are its ingredients.</p></div>
+
+<h3>Stage 1. Start from Bradley-Terry with the (unknown) true reward</h3>
+<figure class="diagram">
+<svg viewBox="0 0 760 120" style="max-width:100%;height:auto" role="img" aria-label="Stage 1: Bradley-Terry with a reward">
+  <defs><marker id="p09b1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <g font-size="12.5" text-anchor="middle">
+    <rect x="20" y="30" width="150" height="50" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="95" y="52">(x, y_w, y_l)</text><text x="95" y="68" class="muted-t" font-size="11.5">preference pair</text>
+    <rect x="230" y="30" width="170" height="50" rx="8" fill="var(--surface-2)" stroke="var(--s7)"/><text x="315" y="52">rewards r(x,y_w), r(x,y_l)</text><text x="315" y="68" class="muted-t" font-size="11.5">unknown, needs a network</text>
+    <rect x="460" y="30" width="280" height="50" rx="8" fill="var(--surface-2)" stroke="var(--s4)"/><text x="600" y="52">P(y_w beats y_l) = sigma(r_w - r_l)</text><text x="600" y="68" class="muted-t" font-size="11.5">depends on the reward gap only</text>
+  </g>
+  <line x1="170" y1="55" x2="228" y2="55" stroke="var(--text-3)" stroke-width="1.6" marker-end="url(#p09b1)"/>
+  <line x1="400" y1="55" x2="458" y2="55" stroke="var(--text-3)" stroke-width="1.6" marker-end="url(#p09b1)"/>
+  <text x="380" y="108" text-anchor="middle" font-size="12" class="muted-t">Stage 1: the likelihood we want to maximise is written in terms of r</text>
+</svg>
+<figcaption class="small muted">Stage 1 — the objective of proof 1, still in terms of a reward.</figcaption>
+</figure>
+<ol class="steps">
+<li>$$P(y_w\succ y_l\mid x)=\sigma\big(r(x,y_w)-r(x,y_l)\big)$$ <span class="why">Bradley-Terry (proof 1)</span></li>
+</ol>
+
+<h3>Stage 2. Invert the optimal policy to express the reward through policies</h3>
+<figure class="diagram">
+<svg viewBox="0 0 760 130" style="max-width:100%;height:auto" role="img" aria-label="Stage 2: invert the optimal policy">
+  <defs><marker id="p09b2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <g font-size="12.5" text-anchor="middle">
+    <rect x="20" y="28" width="300" height="52" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="170" y="50">pi* = pi_ref · e^(r/beta) / Z(x)</text><text x="170" y="68" class="muted-t" font-size="11.5">reward to policy (proof 2)</text>
+    <rect x="440" y="28" width="300" height="52" rx="8" fill="var(--accent-soft)" stroke="var(--s2)"/><text x="590" y="50">r = beta log(pi*/pi_ref) + beta log Z(x)</text><text x="590" y="68" class="muted-t" font-size="11.5">policy to reward</text>
+  </g>
+  <line x1="322" y1="54" x2="438" y2="54" stroke="var(--text-3)" stroke-width="1.6" marker-end="url(#p09b2)"/>
+  <text x="380" y="46" text-anchor="middle" font-size="11.5" class="muted-t">take log, solve</text>
+  <text x="380" y="118" text-anchor="middle" font-size="12" class="muted-t">Stage 2: the reward is a log-ratio of policies, plus a term depending on x only</text>
+</svg>
+<figcaption class="small muted">Stage 2 — the optimum is a bijection between rewards and policies (up to $\log Z$).</figcaption>
+</figure>
+<ol class="steps">
+<li>$$\log\pi^*(y|x)=\log\pi_{\mathrm{ref}}(y|x)+\frac{r(x,y)}{\beta}-\log Z(x)$$ <span class="why">take log of the closed form</span></li>
+<li>$$r(x,y)=\beta\log\frac{\pi^*(y|x)}{\pi_{\mathrm{ref}}(y|x)}+\beta\log Z(x)$$ <span class="why">multiply by $\beta$, rearrange</span></li>
+</ol>
+
+<h3>Stage 3. Take winner minus loser: the partition function cancels</h3>
+<figure class="diagram">
+<svg viewBox="0 0 760 150" style="max-width:100%;height:auto" role="img" aria-label="Stage 3: Z cancels in the difference">
+  <g font-size="12.5" text-anchor="middle">
+    <rect x="20" y="24" width="330" height="40" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="185" y="49">r_w = beta log(pi*_w / ref_w) + beta log Z</text>
+    <rect x="20" y="76" width="330" height="40" rx="8" fill="var(--surface-2)" stroke="var(--s8)"/><text x="185" y="101">r_l = beta log(pi*_l / ref_l) + beta log Z</text>
+    <text x="378" y="75" font-size="26">-</text>
+    <rect x="410" y="40" width="330" height="60" rx="8" fill="var(--accent-soft)" stroke="var(--s2)"/><text x="575" y="64">r_w - r_l = beta log(pi*_w/ref_w)</text><text x="575" y="84">- beta log(pi*_l/ref_l)</text>
+  </g>
+  <path d="M290,36 L346,52 M290,88 L346,106" stroke="var(--s2)" stroke-width="2" opacity="0"/>
+  <text x="380" y="140" text-anchor="middle" font-size="12" class="muted-t">beta log Z(x) is identical in both lines (same prompt x), so it subtracts to zero</text>
+</svg>
+<figcaption class="small muted">Stage 3 — the intractable sum over all responses disappears because both responses share the prompt.</figcaption>
+</figure>
+<ol class="steps">
+<li>Write Stage 2 for the winner and for the loser (same $x$):
+$$r(x,y_w)=\beta\log\tfrac{\pi^*(y_w|x)}{\pi_{\mathrm{ref}}(y_w|x)}+\beta\log Z(x),\qquad r(x,y_l)=\beta\log\tfrac{\pi^*(y_l|x)}{\pi_{\mathrm{ref}}(y_l|x)}+\beta\log Z(x)$$</li>
+<li>Subtract:
+$$r(x,y_w)-r(x,y_l)=\beta\log\frac{\pi^*(y_w|x)}{\pi_{\mathrm{ref}}(y_w|x)}-\beta\log\frac{\pi^*(y_l|x)}{\pi_{\mathrm{ref}}(y_l|x)}$$ <span class="why">$Z(x)$ does not depend on $y$</span></li>
+</ol>
+
+<h3>Stage 4. Plug into Bradley-Terry; replace the optimal policy by the trainable policy</h3>
+<figure class="diagram">
+<svg viewBox="0 0 760 140" style="max-width:100%;height:auto" role="img" aria-label="Stage 4: substitute and parameterise">
+  <defs><marker id="p09b4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <g font-size="12.5" text-anchor="middle">
+    <rect x="20" y="24" width="210" height="50" rx="8" fill="var(--surface-2)" stroke="var(--s4)"/><text x="125" y="46">sigma( r_w - r_l )</text><text x="125" y="63" class="muted-t" font-size="11.5">Stage 1</text>
+    <rect x="260" y="24" width="230" height="50" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="375" y="46">gap = beta[log ratio_w - log ratio_l]</text><text x="375" y="63" class="muted-t" font-size="11.5">Stage 3, with pi*</text>
+    <rect x="520" y="24" width="220" height="50" rx="8" fill="var(--accent-soft)" stroke="var(--s2)"/><text x="630" y="46">pi* to pi_theta (trainable)</text><text x="630" y="63" class="muted-t" font-size="11.5">fit the preferences with pi_theta</text>
+  </g>
+  <line x1="230" y1="49" x2="258" y2="49" stroke="var(--text-3)" stroke-width="1.6" marker-end="url(#p09b4)"/>
+  <line x1="490" y1="49" x2="518" y2="49" stroke="var(--text-3)" stroke-width="1.6" marker-end="url(#p09b4)"/>
+  <text x="380" y="110" text-anchor="middle" font-size="12.5">P_theta(y_w beats y_l) = sigma( beta log(pi_theta(y_w)/pi_ref(y_w)) - beta log(pi_theta(y_l)/pi_ref(y_l)) )</text>
+  <text x="380" y="130" text-anchor="middle" font-size="11.5" class="muted-t">the reward network r_phi has been replaced by the implicit reward beta log(pi_theta / pi_ref)</text>
+</svg>
+<figcaption class="small muted">Stage 4 — Bradley-Terry written purely in terms of the policy being trained.</figcaption>
+</figure>
+<ol class="steps">
+<li>Substituting the Stage 3 difference into Stage 1 gives the preference probability under the optimal policy:
+$$P(y_w\succ y_l\mid x)=\sigma\Big(\beta\log\tfrac{\pi^*(y_w|x)}{\pi_{\mathrm{ref}}(y_w|x)}-\beta\log\tfrac{\pi^*(y_l|x)}{\pi_{\mathrm{ref}}(y_l|x)}\Big)$$ <span class="why">substitution</span></li>
+<li>$\pi^*$ is unknown and incomputable, but it is the policy we are after: model it with the network $\pi_\theta$. This is a reparameterisation of the reward model, $r_\theta(x,y)=\beta\log\frac{\pi_\theta(y|x)}{\pi_{\mathrm{ref}}(y|x)}$ (the $\beta\log Z$ part is dropped; by proof 1 step 4 a per-prompt constant does not change any preference probability): <span class="why">implicit reward</span></li>
+</ol>
+
+<h3>Stage 5. Maximum likelihood gives the loss; two pipelines collapse into one step</h3>
+<figure class="diagram">
+<svg viewBox="0 0 760 240" style="max-width:100%;height:auto" role="img" aria-label="Stage 5: RLHF pipeline versus DPO">
+  <defs><marker id="p09b5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <text x="20" y="20" font-size="13" font-weight="700">Classical RLHF (PPO)</text>
+  <g font-size="12" text-anchor="middle">
+    <rect x="20" y="32" width="120" height="44" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="80" y="52">preference data</text><text x="80" y="67" class="muted-t" font-size="11">(x, y_w, y_l)</text>
+    <rect x="190" y="32" width="140" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s7)"/><text x="260" y="52">fit reward model</text><text x="260" y="67" class="muted-t" font-size="11">Bradley-Terry</text>
+    <rect x="380" y="32" width="170" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s4)"/><text x="465" y="52">RL loop (PPO)</text><text x="465" y="67" class="muted-t" font-size="11">actor, critic, ref, reward</text>
+    <rect x="600" y="32" width="140" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="670" y="52">policy pi*</text><text x="670" y="67" class="muted-t" font-size="11">KL-optimal</text>
+  </g>
+  <line x1="140" y1="54" x2="188" y2="54" stroke="var(--text-3)" stroke-width="1.5" marker-end="url(#p09b5)"/>
+  <line x1="330" y1="54" x2="378" y2="54" stroke="var(--text-3)" stroke-width="1.5" marker-end="url(#p09b5)"/>
+  <line x1="550" y1="54" x2="598" y2="54" stroke="var(--text-3)" stroke-width="1.5" marker-end="url(#p09b5)"/>
+  <text x="20" y="124" font-size="13" font-weight="700">DPO</text>
+  <g font-size="12" text-anchor="middle">
+    <rect x="20" y="136" width="120" height="44" rx="8" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="80" y="156">preference data</text><text x="80" y="171" class="muted-t" font-size="11">(x, y_w, y_l)</text>
+    <rect x="190" y="136" width="360" height="44" rx="8" fill="var(--accent-soft)" stroke="var(--s2)" stroke-width="2"/><text x="370" y="156">one supervised step: minimise DPO loss</text><text x="370" y="171" class="muted-t" font-size="11">needs pi_theta and frozen pi_ref only; Z(x) cancelled</text>
+    <rect x="600" y="136" width="140" height="44" rx="8" fill="var(--surface-2)" stroke="var(--s3)"/><text x="670" y="156">policy pi_theta</text><text x="670" y="171" class="muted-t" font-size="11">same optimum</text>
+  </g>
+  <line x1="140" y1="158" x2="188" y2="158" stroke="var(--text-3)" stroke-width="1.5" marker-end="url(#p09b5)"/>
+  <line x1="550" y1="158" x2="598" y2="158" stroke="var(--text-3)" stroke-width="1.5" marker-end="url(#p09b5)"/>
+  <text x="380" y="214" text-anchor="middle" font-size="12" class="muted-t">reward model and RL loop are collapsed: the policy is secretly a reward model</text>
+</svg>
+<figcaption class="small muted">Stage 5 — The reward-model stage and the RL stage disappear; preference pairs are still needed, a scalar reward network is not.</figcaption>
+</figure>
+<ol class="steps">
+<li>Maximum likelihood over preference pairs, as in proof 1, now with $P_\theta$ from Stage 4:
+$$\max_\theta\ \mathbb E\log P_\theta(y_w\succ y_l\mid x)$$ <span class="why">maximum likelihood</span></li>
+<li>Negate to obtain the DPO loss:
+$$\boxed{\mathcal L_{\mathrm{DPO}}(\theta)=-\mathbb E_{(x,y_w,y_l)}\log\sigma\Big(\beta\Big[\log\tfrac{\pi_\theta(y_w|x)}{\pi_{\mathrm{ref}}(y_w|x)}-\log\tfrac{\pi_\theta(y_l|x)}{\pi_{\mathrm{ref}}(y_l|x)}\Big]\Big)}$$ <span class="why">negative log-likelihood</span></li>
+<li>Sequence log-probabilities (step filled in — not written out in class): $\log\pi(y|x)=\sum_t\log\pi(y_t\mid x,y_{\lt t})$, i.e. sums of token log-probs from the LLM's log-softmax, so the loss needs only forward passes of $\pi_\theta$ and $\pi_{\mathrm{ref}}$ on $y_w$ and $y_l$. <span class="why">chain rule of probability</span></li>
+<li>Gradient (step filled in — not written out in class). With implicit reward $\hat r_\theta=\beta\log\frac{\pi_\theta}{\pi_{\mathrm{ref}}}$ and $\hat\Delta=\hat r_\theta(y_w)-\hat r_\theta(y_l)$, using $\frac{d}{dz}[-\log\sigma(z)]=-\sigma(-z)$:
+$$\nabla_\theta\mathcal L_{\mathrm{DPO}}=-\beta\,\mathbb E\Big[\sigma\big(\hat r_\theta(y_l)-\hat r_\theta(y_w)\big)\big(\nabla_\theta\log\pi_\theta(y_w|x)-\nabla_\theta\log\pi_\theta(y_l|x)\big)\Big]$$ <span class="why">chain rule; $\pi_{\mathrm{ref}}$ has no $\theta$</span>
+Raise the winner's likelihood, lower the loser's, each pair weighted by how wrongly the implicit reward currently ranks it.</li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box def"><span class="box-title">Worked check</span>
+<p>(a) Identity of Stage 2 with proof 2's numbers ($\beta=1$): $\log(\pi^*/\pi_{\mathrm{ref}})=(-1.0272,\ -0.0272,\ 0.9728)$ and $\log Z=1.0272$; adding gives $(0,1,2)=r$ ✓. The gap $r_3-r_1=2$ equals $0.9728-(-1.0272)=2$ ✓ with $\log Z$ gone.
+(b) Loss on one pair: $\beta=0.1$, $\log\frac{\pi_\theta(y_w)}{\pi_{\mathrm{ref}}(y_w)}=+3.0$, $\log\frac{\pi_\theta(y_l)}{\pi_{\mathrm{ref}}(y_l)}=-2.0$. Margin $=0.1\times5=0.5$; $\sigma(0.5)=0.6225$; loss $=0.474$; gradient weight $\sigma(-0.5)=0.3775$, times the factor $\beta=0.1$ gives $0.0378$. At init $\pi_\theta=\pi_{\mathrm{ref}}$: margin $0$, loss $\ln2=0.693$.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Chain to reproduce: Bradley-Terry $\to$ optimal Boltzmann policy $\to$ $r=\beta\log\frac{\pi^*}{\pi_{\mathrm{ref}}}+\beta\log Z$ $\to$ winner minus loser kills $\log Z$ $\to$ boxed loss.</li>
+<li>DPO <em>still needs</em> preference data $(x,y_w,y_l)$ and needs a trainable policy and a reference policy; it does <em>not</em> train a scalar reward model; it turns alignment into a classification-style supervised objective.</li>
+<li>Professor on trade-offs (practical, not a theorem): PPO-style RLHF is more stable and slightly more data-efficient thanks to an explicit reward model; DPO is simpler. Only the final actor is deployed.</li>
+<li>Pairwise data discards absolute scores but avoids subjective calibration; ordering suffices (SQL example: correct beats wrong; if both correct, faster wins).</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Saying DPO "needs no reference model" or "no preference data". It needs both. Also, $Z(x)$ cancels only because $y_w$ and $y_l$ answer the <em>same</em> prompt; and the ratio is $\pi_\theta/\pi_{\mathrm{ref}}$ per response, not $\pi_\theta(y_w)/\pi_\theta(y_l)$.</p></div>
+
+<!-- ================================================================ -->
+<h2 id="grpo" class="proof-head">4. GRPO: group-relative advantage replaces the critic</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>(Lecture Nov 7 / Nov 10.) PPO needs four networks (actor, old/reference policy, reward model, critic) because the advantage is $A=r-V$. GRPO samples a group of $G$ responses to one prompt and uses $\hat A_i=\frac{r_i-\mathrm{mean}(r_{1:G})}{\mathrm{std}(r_{1:G})+\varepsilon}$, which needs no critic; the group mean is a baseline that leaves the policy gradient unbiased (up to a known factor). Used later: this is the training rule behind DeepSeek-style RLVR.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 270" style="max-width:100%;height:auto" role="img" aria-label="Group of sampled responses with rewards, group mean and standardised advantages">
+  <defs><marker id="p09c1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <text x="190" y="18" text-anchor="middle" font-size="14" font-weight="700">Rewards of G = 4 samples for one prompt</text>
+  <line x1="40" y1="210" x2="350" y2="210" stroke="var(--text-3)"/>
+  <rect x="62" y="160" width="40" height="50" fill="var(--s1)" opacity=".75"/><rect x="130" y="135" width="40" height="75" fill="var(--s1)" opacity=".75"/><rect x="198" y="75" width="40" height="135" fill="var(--s3)"/><rect x="266" y="150" width="40" height="60" fill="var(--s1)" opacity=".75"/>
+  <line x1="40" y1="135" x2="350" y2="135" stroke="var(--s2)" stroke-width="2" stroke-dasharray="5 3"/>
+  <text x="352" y="139" font-size="12" style="fill:var(--s2)" font-weight="700">mean 0.5</text>
+  <g font-size="12" text-anchor="middle"><text x="82" y="154">0.2</text><text x="150" y="129">0.5</text><text x="218" y="69">0.9</text><text x="286" y="172">0.4</text>
+  <text x="82" y="226">y1</text><text x="150" y="226">y2</text><text x="218" y="226">y3</text><text x="286" y="226">y4</text></g>
+  <text x="190" y="252" text-anchor="middle" font-size="11.5" class="muted-t">baseline = group mean: no value network needed</text>
+  <line x1="410" y1="130" x2="440" y2="130" stroke="var(--text-3)" stroke-width="1.6" marker-end="url(#p09c1)"/>
+  <text x="425" y="120" text-anchor="middle" font-size="11" class="muted-t">(r-mean)/std</text>
+  <text x="600" y="18" text-anchor="middle" font-size="14" font-weight="700">Advantages  A_i</text>
+  <line x1="460" y1="130" x2="740" y2="130" stroke="var(--text-3)"/>
+  <rect x="480" y="130" width="36" height="53" fill="var(--s8)" opacity=".85"/><rect x="540" y="129" width="36" height="2" fill="var(--text-3)"/><rect x="600" y="59" width="36" height="71" fill="var(--s3)"/><rect x="660" y="130" width="36" height="18" fill="var(--s8)" opacity=".85"/>
+  <g font-size="12" text-anchor="middle"><text x="498" y="198">-1.18</text><text x="558" y="122">0</text><text x="618" y="52">+1.57</text><text x="678" y="164">-0.39</text>
+  <text x="498" y="216">y1</text><text x="558" y="216">y2</text><text x="618" y="216">y3</text><text x="678" y="216">y4</text></g>
+  <text x="600" y="252" text-anchor="middle" font-size="11.5" class="muted-t">sum = 0, sum of squares = G = 4</text>
+</svg>
+<figcaption class="small muted">Figure 4 — Each response is judged against its peers: above-mean responses get a positive advantage (reinforced), below-mean negative (suppressed).</figcaption>
+</figure>
+
+<h3>Derivation</h3>
+<ol class="steps">
+<li>Policy-gradient with a baseline (from the PPO part; notation $x$ prompt, $y$ response): $\nabla_\theta J=\mathbb E_{y\sim\pi_\theta}\big[A(x,y)\,\nabla_\theta\log\pi_\theta(y|x)\big]$ with $A=r-V$ and $V(x)=\mathbb E_{y\sim\pi_\theta}[r(x,y)]$. PPO learns $V_\psi$ as a fourth network. <span class="why">advantage = reward minus value</span></li>
+<li>Any $y$-independent baseline $b(x)$ is allowed (step filled in — not written out in class): $\mathbb E_y[b\,\nabla\log\pi]=b\sum_y\nabla\pi(y|x)=b\,\nabla\sum_y\pi(y|x)=b\,\nabla 1=0$. <span class="why">log-derivative trick; $\sum_y\pi=1$</span></li>
+<li>Estimate the baseline $V(x)$ by sampling instead of learning: draw $G$ responses $y_1,\dots,y_G\sim\pi_{\theta_{\mathrm{old}}}(\cdot|x)$ with rewards $r_i=r(x,y_i)$ and use the sample mean
+$$\hat V(x)=\frac1G\sum_{j=1}^G r_j$$ <span class="why">Monte Carlo estimate of $\mathbb E[r]$</span></li>
+<li>Subtract it to get a per-sample advantage; divide by the group standard deviation to put every prompt on a common scale (easy and hard prompts then give updates of similar size):
+$$\hat A_i=\frac{r_i-\operatorname{mean}(r_1,\dots,r_G)}{\operatorname{std}(r_1,\dots,r_G)+\varepsilon}$$ <span class="why">baseline + standardisation; $\varepsilon$ avoids division by 0</span></li>
+<li>Consequences: $\sum_i\hat A_i=0$ (centred); with population std, $\sum_i\hat A_i^2=G$ (step filled in). If all rewards in the group are equal, $\hat A_i=0$ and the prompt gives no gradient. <span class="why">algebra</span></li>
+<li>Plug $\hat A_i$ into the PPO-style surrogate in place of the critic-based advantage. The critic network $V_\psi$ (and its training) is gone; only actor, reference/old policy and reward (a model, or a verifier for RLVR) remain. <span class="why">no value network</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box prof"><span class="box-title">Caveats <span class="lec-date">(filled in, not from class)</span></span>
+<p>Because $\hat V$ contains $r_i$ itself, the baseline is not strictly independent of $y_i$; the leave-one-out mean would be exactly unbiased, while the full-group mean scales the gradient by $(1-1/G)$, harmless for large $G$. The std division is a per-prompt rescaling, not a baseline. The published GRPO objective also uses the PPO clipped ratio and a KL penalty to a reference policy; the lecture mentioned only the advantage estimator.</p></div>
+
+<div class="box def"><span class="box-title">Worked check</span>
+<p>$r=(0.2,0.5,0.9,0.4)$: mean $0.5$; population std $=\sqrt{(0.09+0+0.16+0.01)/4}=0.2550$. $\hat A=(-1.177,\ 0,\ +1.569,\ -0.392)$; sum $=0$; sum of squares $=1.385+0+2.462+0.154=4=G$ ✓. For verifiable 0/1 rewards $(1,0,0,1)$: mean $0.5$, std $0.5$, $\hat A=(+1,-1,-1,+1)$.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>PPO-RLHF uses 4 roles: actor $\pi_\theta$, old/reference policy, reward model, critic $V_\psi$. GRPO removes the <em>critic</em>; DPO removes the <em>reward model</em>; combining them removes both.</li>
+<li>Write the advantage formula with the group mean and std; say "each response is evaluated relative to its peers, supplying a baseline without a value network".</li>
+<li>Clarification printed in the notes: GRPO is group-relative <em>normalisation</em>, not just "sum of rewards" as the transcript said.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Claiming GRPO needs no reward at all. It still needs a reward per sampled response (a learned model or a verifier such as test-pass fraction); it only drops the learned <em>value</em> network.</p></div>
+
+<!-- ================================================================ -->
+<h2 id="zoh" class="proof-head">5. SSM discretisation (zero-order hold)</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>(Lecture Nov 7 / Nov 10; the class gave the result and said "skip the algebra", so the derivation is filled in.) For the continuous system $\dot x=Ax+Bu$, $y=Cx+Du$ sampled every $\Delta$ with the input held constant over each step, the exact state update is $x_k=\bar Ax_{k-1}+\bar Bu_k$ with $\bar A=e^{\Delta A}$ and $\bar B=(\Delta A)^{-1}(e^{\Delta A}-I)\Delta B$. Used later: this recurrence is what gets unrolled into a convolution (proof 6).</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 270" style="max-width:100%;height:auto" role="img" aria-label="Continuous state curve driven by piecewise constant input, with sampled discrete states">
+  <text x="380" y="18" text-anchor="middle" font-size="14" font-weight="700">Scalar SSM, A = -1: continuous state vs. discrete states (Delta = 0.5)</text>
+  <line x1="50" y1="200" x2="720" y2="200" stroke="var(--text-3)"/><line x1="50" y1="30" x2="50" y2="200" stroke="var(--text-3)"/>
+  <path d="M50.0,200.0 L50.0,50.0 L232.9,50.0 L232.9,155.0 L415.7,155.0 L415.7,200.0 L507.1,200.0 L507.1,80.0 L690.0,80.0" fill="none" stroke="var(--s4)" stroke-width="2" stroke-dasharray="5 3"/>
+  <path d="M50.0,200.0 L59.1,192.7 L68.3,185.7 L77.4,179.1 L86.6,172.8 L95.7,166.8 L104.9,161.1 L114.0,155.7 L123.1,150.5 L132.3,145.6 L141.4,141.0 L150.6,136.5 L159.7,132.3 L168.9,128.3 L178.0,124.5 L187.1,120.9 L196.3,117.4 L205.4,114.1 L214.6,111.0 L223.7,108.0 L232.9,105.2 L242.0,107.6 L251.1,109.9 L260.3,112.1 L269.4,114.2 L278.6,116.2 L287.7,118.1 L296.9,119.9 L306.0,121.6 L315.1,123.2 L324.3,124.8 L333.4,126.3 L342.6,127.7 L351.7,129.0 L360.9,130.3 L370.0,131.5 L379.1,132.6 L388.3,133.7 L397.4,134.7 L406.6,135.7 L415.7,136.7 L424.9,139.8 L434.0,142.7 L443.1,145.5 L452.3,148.2 L461.4,150.7 L470.6,153.1 L479.7,155.4 L488.9,157.6 L498.0,159.6 L507.1,161.6 L516.3,157.6 L525.4,153.8 L534.6,150.2 L543.7,146.8 L552.9,143.5 L562.0,140.4 L571.1,137.5 L580.3,134.7 L589.4,132.0 L598.6,129.5 L607.7,127.1 L616.9,124.8 L626.0,122.6 L635.1,120.5 L644.3,118.5 L653.4,116.7 L662.6,114.9 L671.7,113.2 L680.9,111.6 L690.0,110.0" fill="none" stroke="var(--s1)" stroke-width="2.6"/>
+  <g fill="var(--s2)"><circle cx="141.4" cy="141.0" r="5"/><circle cx="232.9" cy="105.2" r="5"/><circle cx="324.3" cy="124.8" r="5"/><circle cx="415.7" cy="136.7" r="5"/><circle cx="507.1" cy="161.6" r="5"/><circle cx="598.6" cy="129.5" r="5"/><circle cx="690.0" cy="110.0" r="5"/></g>
+  <g stroke="var(--text-3)" stroke-dasharray="2 3"><line x1="141.4" y1="141" x2="141.4" y2="204"/><line x1="232.9" y1="105" x2="232.9" y2="204"/><line x1="324.3" y1="125" x2="324.3" y2="204"/><line x1="415.7" y1="137" x2="415.7" y2="204"/><line x1="507.1" y1="162" x2="507.1" y2="204"/><line x1="598.6" y1="129" x2="598.6" y2="204"/><line x1="690" y1="110" x2="690" y2="204"/></g>
+  <g font-size="12" text-anchor="middle"><text x="141" y="220">x1</text><text x="233" y="220">x2</text><text x="324" y="220">x3</text><text x="416" y="220">x4</text><text x="507" y="220">x5</text><text x="599" y="220">x6</text><text x="690" y="220">x7</text><text x="50" y="220">0</text></g>
+  <text x="380" y="244" text-anchor="middle" font-size="12" class="muted-t">time (steps of Delta); each discrete state is the exact continuous state at t = k Delta</text>
+  <g font-size="12"><line x1="60" y1="256" x2="84" y2="256" stroke="var(--s4)" stroke-width="2" stroke-dasharray="5 3"/><text x="90" y="260">input u held constant (ZOH)</text>
+  <line x1="260" y1="256" x2="284" y2="256" stroke="var(--s1)" stroke-width="2.6"/><text x="290" y="260">continuous state x(t)</text>
+  <circle cx="450" cy="256" r="5" fill="var(--s2)"/><text x="460" y="260">discrete x_k</text></g>
+</svg>
+<figcaption class="small muted">Figure 5 — Within each interval the state relaxes exponentially toward $-B A^{-1}u_k$ at rate $A$; the recurrence $x_k=\bar Ax_{k-1}+\bar Bu_k$ jumps exactly from one sample to the next. (Illustrative input values.)</figcaption>
+</figure>
+
+<h3>Derivation</h3>
+<ol class="steps">
+<li>Multiply $\dot x-Ax=Bu$ by $e^{-At}$; since $\frac{d}{dt}\big(e^{-At}x\big)=e^{-At}(\dot x-Ax)$,
+$$\frac{d}{dt}\big(e^{-At}x(t)\big)=e^{-At}Bu(t)$$ <span class="why">integrating factor</span></li>
+<li>Integrate from $t_0$ to $t$ and multiply by $e^{At}$:
+$$x(t)=e^{A(t-t_0)}x(t_0)+\int_{t_0}^{t}e^{A(t-s)}Bu(s)\,ds$$ <span class="why">variation of constants</span></li>
+<li>Apply to one step, $t_0=(k-1)\Delta$, $t=k\Delta$, and write $x_k=x(k\Delta)$:
+$$x_k=e^{\Delta A}x_{k-1}+\int_{(k-1)\Delta}^{k\Delta}e^{(k\Delta-s)A}Bu(s)\,ds$$ <span class="why">exact over one interval</span></li>
+<li>Zero-order hold: $u(s)=u_k$ on the interval, so it leaves the integral:
+$$x_k=e^{\Delta A}x_{k-1}+\Big(\int_{(k-1)\Delta}^{k\Delta}e^{(k\Delta-s)A}ds\Big)Bu_k$$ <span class="why">$u$ constant on the step</span></li>
+<li>Substitute $\tau=k\Delta-s$ ($s=(k-1)\Delta$ gives $\tau=\Delta$ and $s=k\Delta$ gives $\tau=0$; $ds=-d\tau$ flips the limits back to $0\to\Delta$):
+$$\int_{(k-1)\Delta}^{k\Delta}e^{(k\Delta-s)A}ds=\int_0^{\Delta}e^{\tau A}d\tau$$ <span class="why">change of variable</span></li>
+<li>For invertible $A$, $\frac{d}{d\tau}\big(A^{-1}e^{\tau A}\big)=e^{\tau A}$, hence
+$$\int_0^\Delta e^{\tau A}d\tau=A^{-1}\big(e^{\Delta A}-I\big)=(\Delta A)^{-1}\big(e^{\Delta A}-I\big)\Delta$$ <span class="why">fundamental theorem of calculus</span></li>
+<li>Read off the discrete system, and since $y=Cx+Du$ is algebraic it carries over unchanged:
+$$\bar A=e^{\Delta A},\quad \bar B=(\Delta A)^{-1}(e^{\Delta A}-I)\,\Delta B,\quad \bar C=C,\quad \bar D=D$$
+$$x_k=\bar Ax_{k-1}+\bar Bu_k,\qquad y_k=\bar Cx_k+\bar Du_k$$ <span class="why">matches the lecture's recurrence</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box def"><span class="box-title">Worked check (scalar, $A=-1$, $B=1$, $\Delta=0.1$)</span>
+<p>$\bar A=e^{-0.1}=0.904837$. $\bar B=(-1)^{-1}(e^{-0.1}-1)\cdot1=1-e^{-0.1}=0.095163$. Sanity: from $x(0)=0$ with constant $u=1$, the exact ODE solution is $x(t)=1-e^{-t}$, so $x(0.1)=0.095163=\bar B$ ✓.
+Other discretisations for comparison: forward Euler $\bar A=I+\Delta A=0.9$, $\bar B=\Delta B=0.1$ (the first-order truncation of the exact pair); bilinear / Tustin (the transform the professor named; formulas filled in) $\bar A=(I-\tfrac\Delta2A)^{-1}(I+\tfrac\Delta2A)=0.95/1.05=0.904762$, $\bar B=(I-\tfrac\Delta2A)^{-1}\Delta B=0.1/1.05=0.095238$. Both approximate the exact ZOH values; ZOH is exact for piecewise-constant input.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Discretise by sampling $u_k=u(k\Delta)$; the new matrices $\bar A,\bar B,\bar C$ are functions of $\Delta$ and the continuous $A,B,C$; $D$ is usually dropped and handled by a skip connection.</li>
+<li>Write the recurrence $x_k=\bar Ax_{k-1}+\bar Bu_k$, $y_k=\bar Cx_k$; the state $x_k$ is the "state space" that links input and output sequences.</li>
+<li>Notation flag from class: here $x$ is the <em>hidden state</em>, $u$ is the input; multi-dimensional inputs are handled channel by channel with learned mixing.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Writing $\bar A=\Delta A$ or $\bar B=B$. The exact transition is the matrix exponential, and $\bar B$ carries the integral factor $A^{-1}(e^{\Delta A}-I)$, which tends to $\Delta I$ only when $\Delta\|A\|$ is small.</p></div>
+
+<!-- ================================================================ -->
+<h2 id="conv" class="proof-head">6. Unrolling the recurrence into a convolution</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>(Lecture Nov 7 / Nov 10.) With $x_{-1}=0$ and $D=0$, the SSM output is $y_k=\sum_{j=0}^{k}\bar C\bar A^{k-j}\bar B\,u_j=(\bar K*u)_k$ with kernel $\bar K=(\bar C\bar B,\ \bar C\bar A\bar B,\ \bar C\bar A^2\bar B,\dots)$. Hence the same model can be trained as a convolution (parallel over time, via FFT) and run as a recurrence (O(1) state per step) at inference. Used later: S4 and Mamba are different ways of computing $\bar K$.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 330" style="max-width:100%;height:auto" role="img" aria-label="Recurrent chain and convolution of the kernel with the input">
+  <defs><marker id="p09d1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-3)"/></marker></defs>
+  <text x="380" y="18" text-anchor="middle" font-size="14" font-weight="700">View 1: recurrent chain (sequential, O(1) memory)</text>
+  <g font-size="12" text-anchor="middle">
+    <circle cx="60" cy="70" r="20" fill="var(--surface-2)" stroke="var(--s1)"/><text x="60" y="74">0</text>
+    <circle cx="200" cy="70" r="20" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="200" y="74">x_0</text>
+    <circle cx="340" cy="70" r="20" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="340" y="74">x_1</text>
+    <circle cx="480" cy="70" r="20" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="480" y="74">x_2</text>
+    <circle cx="620" cy="70" r="20" fill="var(--accent-soft)" stroke="var(--s1)"/><text x="620" y="74">x_3</text>
+  </g>
+  <g stroke="var(--text-3)" stroke-width="1.6" marker-end="url(#p09d1)"><line x1="80" y1="70" x2="178" y2="70"/><line x1="220" y1="70" x2="318" y2="70"/><line x1="360" y1="70" x2="458" y2="70"/><line x1="500" y1="70" x2="598" y2="70"/></g>
+  <g font-size="11.5" text-anchor="middle" class="muted-t"><text x="130" y="62">A-bar</text><text x="270" y="62">A-bar</text><text x="410" y="62">A-bar</text><text x="550" y="62">A-bar</text></g>
+  <g stroke="var(--s3)" stroke-width="1.6" marker-end="url(#p09d1)"><line x1="200" y1="128" x2="200" y2="94"/><line x1="340" y1="128" x2="340" y2="94"/><line x1="480" y1="128" x2="480" y2="94"/><line x1="620" y1="128" x2="620" y2="94"/></g>
+  <g font-size="12" text-anchor="middle"><text x="200" y="144">u_0</text><text x="340" y="144">u_1</text><text x="480" y="144">u_2</text><text x="620" y="144">u_3</text></g>
+  <g font-size="11.5" text-anchor="middle" class="muted-t"><text x="240" y="118">B-bar</text><text x="380" y="118">B-bar</text><text x="520" y="118">B-bar</text><text x="660" y="118">B-bar</text></g>
+  <text x="380" y="176" text-anchor="middle" font-size="12" class="muted-t">y_k = C-bar x_k read off each state</text>
+  <line x1="40" y1="190" x2="720" y2="190" stroke="var(--border)"/>
+  <text x="380" y="212" text-anchor="middle" font-size="14" font-weight="700">View 2: convolution (all outputs at once), shown for y_3</text>
+  <g font-size="12" text-anchor="middle">
+    <text x="30" y="244" text-anchor="start">input u</text><text x="30" y="284" text-anchor="start">kernel (flipped)</text>
+    <rect x="200" y="226" width="70" height="26" rx="4" fill="var(--surface-2)" stroke="var(--s3)"/><text x="235" y="244">u_0 = 1</text>
+    <rect x="280" y="226" width="70" height="26" rx="4" fill="var(--surface-2)" stroke="var(--s3)"/><text x="315" y="244">u_1 = 2</text>
+    <rect x="360" y="226" width="70" height="26" rx="4" fill="var(--surface-2)" stroke="var(--s3)"/><text x="395" y="244">u_2 = 0</text>
+    <rect x="440" y="226" width="70" height="26" rx="4" fill="var(--surface-2)" stroke="var(--s3)"/><text x="475" y="244">u_3 = -1</text>
+    <rect x="200" y="266" width="70" height="26" rx="4" fill="var(--accent-soft)" stroke="var(--s2)"/><text x="235" y="284">K_3 = .0705</text>
+    <rect x="280" y="266" width="70" height="26" rx="4" fill="var(--accent-soft)" stroke="var(--s2)"/><text x="315" y="284">K_2 = .0779</text>
+    <rect x="360" y="266" width="70" height="26" rx="4" fill="var(--accent-soft)" stroke="var(--s2)"/><text x="395" y="284">K_1 = .0861</text>
+    <rect x="440" y="266" width="70" height="26" rx="4" fill="var(--accent-soft)" stroke="var(--s2)"/><text x="475" y="284">K_0 = .0952</text>
+  </g>
+  <g stroke="var(--text-3)" stroke-dasharray="3 3"><line x1="235" y1="252" x2="235" y2="266"/><line x1="315" y1="252" x2="315" y2="266"/><line x1="395" y1="252" x2="395" y2="266"/><line x1="475" y1="252" x2="475" y2="266"/></g>
+  <rect x="560" y="236" width="180" height="46" rx="8" fill="var(--accent-soft)" stroke="var(--s1)" stroke-width="2"/>
+  <text x="650" y="256" text-anchor="middle" font-size="12.5">y_3 = sum of products</text><text x="650" y="273" text-anchor="middle" font-size="12.5" font-weight="700">= 0.1312</text>
+  <line x1="512" y1="259" x2="558" y2="259" stroke="var(--text-3)" stroke-width="1.6" marker-end="url(#p09d1)"/>
+  <text x="380" y="316" text-anchor="middle" font-size="11.5" class="muted-t">slide the flipped kernel one step to the right for each new output index; with FFT all outputs are computed together</text>
+</svg>
+<figcaption class="small muted">Figure 6 — The same output computed as a recurrence (top) or as the sliding dot product of the kernel with the input (bottom). Numbers: $A=-1,B=1,C=1,\Delta=0.1$.</figcaption>
+</figure>
+
+<h3>Derivation</h3>
+<ol class="steps">
+<li>Start the recurrence from rest and run it for three steps:
+$$x_0=\bar Bu_0,\quad x_1=\bar A\bar Bu_0+\bar Bu_1,\quad x_2=\bar A^2\bar Bu_0+\bar A\bar Bu_1+\bar Bu_2$$ <span class="why">substitute $x_{-1}=0$, then repeatedly</span></li>
+<li>Claim: $x_k=\sum_{j=0}^{k}\bar A^{\,k-j}\bar B\,u_j$. Induction: true for $k=0$; if true for $k$, then
+$$x_{k+1}=\bar A\sum_{j=0}^{k}\bar A^{k-j}\bar Bu_j+\bar Bu_{k+1}=\sum_{j=0}^{k+1}\bar A^{k+1-j}\bar Bu_j$$ <span class="why">induction on the recurrence</span></li>
+<li>Apply the output map ($D$ omitted, handled by a skip connection):
+$$y_k=\bar Cx_k=\sum_{j=0}^{k}\bar C\bar A^{\,k-j}\bar B\,u_j$$ <span class="why">linearity of $\bar C$</span></li>
+<li>Define the kernel entries $\bar K_m=\bar C\bar A^{m}\bar B$ and reindex with $m=k-j$:
+$$y_k=\sum_{m=0}^{k}\bar K_m\,u_{k-m}=(\bar K*u)_k,\qquad \bar K=(\bar C\bar B,\bar C\bar A\bar B,\bar C\bar A^2\bar B,\dots)$$ <span class="why">definition of (causal) convolution</span></li>
+<li>Equivalently $y=Tu$ with a lower-triangular Toeplitz matrix $T_{kj}=\bar K_{k-j}$ (step filled in): the output at step $k$ is a fixed linear function of inputs $u_0,\dots,u_k$ only. <span class="why">causality</span></li>
+<li>Parallel computation: by the convolution theorem $\mathcal F(\bar K*u)=\mathcal F(\bar K)\odot\mathcal F(u)$ (zero-pad to length $2L$ to avoid wrap-around, step filled in), so $y=\mathcal F^{-1}\big(\mathcal F(\bar K)\odot\mathcal F(u)\big)$ in $O(L\log L)$ with no sequential dependency between time steps. <span class="why">FFT, convolution theorem</span></li>
+<li>Two equivalent computation modes of one model: <em>training</em> sees the whole sequence, so build $\bar K$ once and convolve (parallel, unlike an RNN's step-by-step backprop); <em>inference</em> generates token by token, so keep only the state $x_k$ and apply the recurrence, with memory independent of how many tokens have been seen (unlike attention's growing cache). <span class="why">same $y$ from both views</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box def"><span class="box-title">Worked check</span>
+<p>Scalar system of proof 5: $\bar A=0.904837$, $\bar B=0.095163$, $\bar C=1$. Kernel $\bar K_m=\bar B\bar A^m$: $(0.095163,\ 0.086107,\ 0.077913,\ 0.070498)$. Input $u=(1,2,0,-1)$.
+Recurrence: $x_0=0.095163$; $x_1=0.904837\cdot0.095163+0.095163\cdot2=0.276432$; $x_2=0.904837\cdot0.276432+0=0.250126$; $x_3=0.904837\cdot0.250126-0.095163=0.131161$.
+Convolution: $y_3=\bar K_0u_3+\bar K_1u_2+\bar K_2u_1+\bar K_3u_0=-0.095163+0+0.155825+0.070498=0.131161$ ✓. Python gives identical vectors $(0.095163,0.276432,0.250126,0.131161)$ for both routes.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>Say it as: "unroll the recurrence like an RNN with $x_{-1}=0$; the output is $\bar C\bar A^{k}\bar B u_0+\bar C\bar A^{k-1}\bar Bu_1+\dots$, which is a convolution of the SSM kernel with $u$".</li>
+<li>Fitting an SSM is equivalent to estimating the kernel $\bar K$ (S4/S5/Mamba differ in how); output = IFFT of ($\mathrm{FFT}(\bar K)\cdot\mathrm{FFT}(u)$).</li>
+<li>Advantages listed in class: no quadratic attention, long context, streaming recurrent inference, convolutional parallelism in training, usable as a layer inside hybrids.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Mixing up the power: it is $\bar A^{\,k-j}$ (age of the input), so the newest input $u_k$ gets $\bar C\bar B$ with no power of $\bar A$. Also the convolution form requires fixed $(\bar A,\bar B,\bar C)$; once they depend on the input (Mamba, next section) there is no single kernel.</p></div>
+
+<!-- ================================================================ -->
+<h2 id="s4mamba" class="proof-head">7. S4 kernel generating function and Mamba selectivity</h2>
+
+<div class="box key"><span class="box-title">Statement</span>
+<p>(Lecture Nov 7 / Nov 10; the professor skipped the algebra and assigned it for self-study.) (a) The kernel's generating function is $K(z)=\sum_{n\ge0}\bar K_nz^{-n}=\bar C(I-\bar Az^{-1})^{-1}\bar B$, a closed form that turns "compute powers of $\bar A$" into "invert one matrix", which S4 exploits with a structured $A$. (b) Mamba lets $\bar B,\bar C,\Delta$ depend on the input, which breaks the single-kernel form; this part is conceptual only, not derived in class.</p></div>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 270" style="max-width:100%;height:auto" role="img" aria-label="Retention factor exp(-Delta) as function of step size, and S4 versus Mamba comparison">
+  <text x="210" y="18" text-anchor="middle" font-size="14" font-weight="700">State retention  A-bar = e^(Delta A), A = -1</text>
+  <line x1="50" y1="200" x2="370" y2="200" stroke="var(--text-3)"/><line x1="50" y1="40" x2="50" y2="204" stroke="var(--text-3)"/>
+  <path d="M50.0,40.0 L60.0,58.8 L70.0,75.4 L80.0,90.0 L90.0,103.0 L100.0,114.4 L110.0,124.4 L120.0,133.3 L130.0,141.1 L140.0,148.1 L150.0,154.2 L160.0,159.5 L170.0,164.3 L180.0,168.5 L190.0,172.2 L200.0,175.5 L210.0,178.3 L220.0,180.9 L230.0,183.1 L240.0,185.1 L250.0,186.9 L260.0,188.4 L270.0,189.8 L280.0,191.0 L290.0,192.0 L300.0,193.0 L310.0,193.8 L320.0,194.5 L330.0,195.2 L340.0,195.7 L350.0,196.2 L360.0,196.7 L370.0,197.1" fill="none" stroke="var(--s1)" stroke-width="2.6"/>
+  <g fill="var(--s2)"><circle cx="58" cy="55.2" r="5"/><circle cx="130" cy="141.1" r="5"/><circle cx="290" cy="192.0" r="5"/></g>
+  <g font-size="12"><text x="62" y="48" style="fill:var(--s2)" font-weight="700">0.1: 0.905</text><text x="136" y="136" style="fill:var(--s2)" font-weight="700">1: 0.368</text><text x="270" y="182" style="fill:var(--s2)" font-weight="700">3: 0.050</text></g>
+  <text x="210" y="222" text-anchor="middle" font-size="12">step size Delta</text>
+  <text x="44" y="204" text-anchor="end" font-size="11.5">0</text><text x="44" y="44" text-anchor="end" font-size="11.5">1</text>
+  <text x="210" y="250" text-anchor="middle" font-size="11.5" class="muted-t">small Delta: keep the past; large Delta: forget it, favour the current input</text>
+  <text x="560" y="62" text-anchor="middle" font-size="13" font-weight="700">S4 (LTI) vs. Mamba (selective)</text>
+  <g font-size="12">
+    <rect x="410" y="76" width="330" height="62" rx="8" fill="var(--surface-2)" stroke="var(--s1)"/>
+    <text x="422" y="96" font-weight="700">S4: A, B, C, Delta fixed over positions</text>
+    <text x="422" y="114" class="muted-t" font-size="11.5">one kernel K, FFT convolution; A structured</text>
+    <text x="422" y="130" class="muted-t" font-size="11.5">(diagonal, or diagonal + low rank)</text>
+    <rect x="410" y="150" width="330" height="76" rx="8" fill="var(--accent-soft)" stroke="var(--s2)"/>
+    <text x="422" y="170" font-weight="700">Mamba: B_k, C_k, Delta_k = functions of u_k</text>
+    <text x="422" y="188" class="muted-t" font-size="11.5">selects what to keep / forget per token;</text>
+    <text x="422" y="204" class="muted-t" font-size="11.5">time-varying, so no single convolution kernel</text>
+    <text x="422" y="220" class="muted-t" font-size="11.5">(computed by a scan instead, not covered in class)</text>
+  </g>
+</svg>
+<figcaption class="small muted">Figure 7 — Left: with $A=-1$ the factor by which the old state survives one step is $e^{-\Delta}$; making $\Delta$ input-dependent lets the model choose per token to remember or forget. Right: the two designs.</figcaption>
+</figure>
+
+<h3>(a) Generating function of the kernel (step filled in)</h3>
+<ol class="steps">
+<li>Definition of the generating (Z-transform) function of the kernel sequence $k_n=\bar K_n=\bar C\bar A^n\bar B$:
+$$K(z)=\sum_{n=0}^{\infty}k_nz^{-n}$$ <span class="why">Z-transform, as in the lecture</span></li>
+<li>Insert $k_n$ and pull constants out:
+$$K(z)=\bar C\Big[\sum_{n=0}^{\infty}\big(\bar Az^{-1}\big)^n\Big]\bar B$$ <span class="why">$\bar A^nz^{-n}=(\bar Az^{-1})^n$</span></li>
+<li>Neumann (matrix geometric) series, valid when $|z|$ exceeds the spectral radius of $\bar A$:
+$$\sum_{n\ge0}M^n=(I-M)^{-1}\ \Rightarrow\ K(z)=\bar C\big(I-\bar Az^{-1}\big)^{-1}\bar B$$ <span class="why">geometric series</span></li>
+<li>Consequence: no powers $\bar A^n$ are formed. Evaluating at points $z$ on the unit circle gives the kernel in the frequency domain directly, where convolution is a pointwise product; the cost is one matrix inverse per frequency, cheap when $A$ is structured (diagonal, or diagonal-plus-low-rank $\Lambda-PQ^*$). <span class="why">why S4 constrains $A$ (details not derived in class)</span></li>
+</ol>
+<div class="qed">&blacksquare;</div>
+
+<div class="box def"><span class="box-title">Worked check</span>
+<p>Scalar case from proof 5: $K(z)=\dfrac{\bar B}{1-\bar A/z}$. At $z=2$: $0.095163/(1-0.452419)=0.173787$. The partial sum of the first four kernel terms $\sum_{n=0}^{3}\bar K_n2^{-n}=0.095163+0.043053+0.019478+0.008812=0.166506$, and summing 200 terms gives $0.173787$ ✓.</p></div>
+
+<h3>(b) Mamba: input-dependent selectivity (conceptual, not derived)</h3>
+<div class="box prof"><span class="box-title">What the professor said <span class="lec-date">Nov 7</span></span>
+<p>Standard (linear time-invariant) SSMs keep the parameters fixed across positions. Mamba (S6) makes the parameters depend on the input, permitting selective retention or forgetting. The notes clarify that precisely it is $B$, $C$ and the step size $\Delta$ that are input-dependent, while $A$ stays structured and acts through $\bar A=e^{\Delta A}$; the lecture's phrase "$A,B,C$ vary with time" is loose. Reading the figure: with $A=-1$, $\Delta=0.1$ keeps $90\%$ of the old state per step and $\Delta=3$ keeps only $5\%$, so a large input-dependent $\Delta_k$ effectively resets the memory. The three-way comparison S4 / S5 / Mamba, the Z-transform kernel algebra and structured $A$ were assigned as self-study.</p></div>
+
+<div class="box exam"><span class="box-title">Remember for the exam</span>
+<ul>
+<li>S4 = Structured State Space for sequence modelling: constrain $A$ (diagonal, or DPLR $A=\Lambda-PQ^*$) so long kernels are computable; kernel via generating functions / Z-transform in the frequency domain, then multiply spectra and inverse-transform.</li>
+<li>Mamba = selective SSM: $B$, $C$, $\Delta$ depend on the input, giving content-based memory; S4 is time-invariant.</li>
+<li>SSMs are sequence-to-sequence, not inherently multimodal; images become patch sequences, as in ViT.</li>
+</ul></div>
+<div class="box pitfall"><span class="box-title">Common mistake</span>
+<p>Saying Mamba makes "$A$, $B$, $C$ all time-varying" without qualification, or claiming it can still be trained by one FFT convolution; time variation destroys the Toeplitz structure of proof 6.</p></div>
+
+<!-- ================================================================ -->
+<h2 id="summary">Summary of all proofs on this page</h2>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Statement</th><th>Key trick</th></tr>
+<tr><td><a href="#bt">1</a></td><td>Bradley-Terry: $P(y_w\succ y_l)=\sigma(r_w-r_l)$; reward-model loss $=-\log\sigma(r_w-r_l)$</td><td>Divide by $e^{r_w}$; likelihood of pairs; only reward differences matter</td></tr>
+<tr><td><a href="#klopt">2</a></td><td>$\arg\max_\pi\mathbb E[r]-\beta\mathrm{KL}(\pi\|\pi_{\mathrm{ref}})=\pi_{\mathrm{ref}}e^{r/\beta}/Z$</td><td>Rewrite objective as $-\beta\,\mathrm{KL}(\pi\|\pi^*)+\beta\log Z$, then $\mathrm{KL}\ge0$ (or Lagrangian)</td></tr>
+<tr><td><a href="#dpo">3</a></td><td>DPO loss $-\log\sigma(\beta[\log\frac{\pi_\theta}{\pi_{\mathrm{ref}}}(y_w)-\log\frac{\pi_\theta}{\pi_{\mathrm{ref}}}(y_l)])$</td><td>Invert the optimal policy to get the reward; $Z(x)$ cancels in the winner-loser difference</td></tr>
+<tr><td><a href="#grpo">4</a></td><td>GRPO advantage $\hat A_i=(r_i-\mathrm{mean})/(\mathrm{std}+\varepsilon)$ needs no critic</td><td>Baselines have zero-mean score term; estimate $V$ by the group mean</td></tr>
+<tr><td><a href="#zoh">5</a></td><td>$\bar A=e^{\Delta A}$, $\bar B=(\Delta A)^{-1}(e^{\Delta A}-I)\Delta B$</td><td>Variation of constants over one step with input held constant</td></tr>
+<tr><td><a href="#conv">6</a></td><td>$y_k=\sum_j\bar C\bar A^{k-j}\bar Bu_j=(\bar K*u)_k$</td><td>Unroll recurrence from $x_{-1}=0$; reindex; convolution theorem for FFT</td></tr>
+<tr><td><a href="#s4mamba">7</a></td><td>$K(z)=\bar C(I-\bar Az^{-1})^{-1}\bar B$; Mamba makes $B,C,\Delta$ input-dependent</td><td>Neumann series (derived); selectivity (conceptual only)</td></tr>
+</table></div>
+
+</main>
+</body>
+</html>
